@@ -64,7 +64,7 @@ pidesktop/
     ├── shared/                  # 主/渲染共享的领域类型与 IPC 通道名
     │   ├── types.ts
     │   ├── ipc.ts
-    │   ├── providers.ts         # 5 家提供商清单 + baseUrl 识别（host + 路径）
+    │   ├── providers.ts         # 6 个提供商预设 + baseUrl 识别（host + 路径）
     │   ├── model-catalog.ts     # 模型参数兜底表（上下文 / 最大输出 / 输入模态）
     │   └── chart.ts             # chart 围栏的解析与几何计算（→ 内联 SVG）
     ├── main/                    # 主进程：唯一有系统权限的地方
