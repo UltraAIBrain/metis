@@ -28,6 +28,7 @@ import { ensureProjectDir } from '../projects'
 import { paths } from '../paths'
 import { validAttachmentsFor } from '../attachments'
 import { assess, callKey, resultDigest, type Outcome } from './stuck-guard'
+import { assessBudget, type BudgetState } from './budget-guard'
 
 /** 子过程落盘时工具输出的回放截断（回放够用，防单行 JSON 数 MB） */
 const SUB_TOOL_CLIP = 8_000
@@ -41,16 +42,14 @@ function withHint(content: string, hint?: string): string {
 }
 
 /** 给用户的提示：说明发生了什么、已经做了什么、用户能怎么接管 */
-function stuckNoticeText(kind: string | undefined, count: number, stopping: boolean): string {
+function stuckNoticeText(kind: string | undefined, count: number): string {
   const what =
     kind === 'failing'
       ? `连续 ${count} 次工具调用都失败`
       : kind === 'alternating'
         ? `最近 ${count} 步在两个动作之间反复交替`
         : `同一调用连续 ${count} 次拿到完全相同的输出`
-  return stopping
-    ? `判定为空转：${what}，不再有进展，本次运行已停止。可以换个说法继续，或自己接手。`
-    : `检测到 ${what}，已提示模型换思路。若它继续原地打转，可以按 Esc 中止后自己接手。`
+  return `检测到 ${what}，已提示模型换思路。若它继续原地打转，可以按 Esc 中止后自己接手。`
 }
 
 /** 上下文压缩的总结提示词：产出结构化摘要，供新分支继续工作 */
@@ -74,6 +73,8 @@ interface ActiveRun {
    * 有新的用户消息注入时清空——与 OpenHands「按最后一条 user 消息切窗口」一致。
    */
   outcomes?: Outcome[]
+  /** 上下文预算提醒的投递状态（对齐 Codex 的 reminder_index：每个阈值只提醒一次） */
+  budget?: BudgetState
 }
 
 /**
@@ -228,6 +229,9 @@ export class AgentRunner {
     const cachedMax = profile.models?.find((m) => m.id === model)?.maxOutput
     const autoMax = cachedMax ?? lookupModel(model)?.maxOutput ?? 16384
     const maxTokens = cfg.maxTokens > 0 ? cfg.maxTokens : autoMax
+    // 上下文预算提醒的分母：接口给的窗口优先，其次内置表（与状态栏 contextWindowOf 同口径）
+    const budgetWindow =
+      profile.models?.find((m) => m.id === model)?.contextWindow ?? lookupModel(model)?.contextWindow
     // 工作目录属于会话（项目）；允许创建时为空，真正开跑时再懒创建
     let cwd = meta.cwd
     if (!cwd) {
@@ -242,11 +246,11 @@ export class AgentRunner {
       }
     }
     const providerId = profile.protocol
-    let status: 'done' | 'aborted' | 'stuck' | 'error' = 'done'
+    let status: 'done' | 'aborted' | 'error' = 'done'
     let failure: AgentError | undefined
     let steps = 0
-    /** 空转判定为 stop 时置位：跑完当前这批工具就收尾，不打断已发出的调用 */
-    let stuckStop = false
+    /** 最近一次响应的 input token（下一次请求的基数），预算提醒用它算剩余比例 */
+    let lastUsageInput = 0
     this.emit({ type: 'run_start', sessionId, at: Date.now() })
     this.log.info('run.start', {
       sessionId,
@@ -424,6 +428,7 @@ export class AgentRunner {
 
         if (result.usage) {
           this.log.info('run.usage', { sessionId, step: steps, ...result.usage })
+          lastUsageInput = result.usage.input
         }
 
         const toolUses = result.blocks.filter((b): b is ToolUseBlock => b.type === 'tool_use')
@@ -587,12 +592,11 @@ export class AgentRunner {
                   isError: raw.isError
                 })
                 const verdict = assess(subOutcomes)
-                if (verdict.action !== 'none') {
+                if (verdict.hint) {
                   this.log.warn('tool.stuck_detected', {
                     sessionId,
                     subagent: label,
                     kind: verdict.kind,
-                    action: verdict.action,
                     count: verdict.count
                   })
                 }
@@ -651,26 +655,46 @@ export class AgentRunner {
               digest: resultDigest(raw.content, raw.isError),
               isError: raw.isError
             })
-            // 空转判定：nudge 只提醒；stop 说明「再试也不会变」，把控制权交回用户。
+            // 空转判定：只提醒，不中止（Codex / Claude Code 都不做行为级硬停）。
             // 判据是「有没有产生新信息」，不是步数。
             const verdict = assess(run.outcomes)
-            if (verdict.action !== 'none') {
+            if (verdict.hint) {
               this.log.warn('tool.stuck_detected', {
                 sessionId,
                 tool: call.name,
                 kind: verdict.kind,
-                action: verdict.action,
                 count: verdict.count
               })
               this.emit({
                 type: 'notice',
                 sessionId,
-                level: verdict.action === 'stop' ? 'error' : 'warn',
-                text: stuckNoticeText(verdict.kind, verdict.count, verdict.action === 'stop')
+                level: 'warn',
+                text: stuckNoticeText(verdict.kind, verdict.count)
               })
-              if (verdict.action === 'stop') stuckStop = true
             }
-            const out = { ...raw, content: withHint(raw.content, verdict.hint) }
+
+            // 上下文预算提醒（Codex RolloutBudget 的做法）：真正的硬约束是窗口，
+            // 与其数步数，不如把「还剩多少」直接告诉模型，由它自己收尾。
+            const budget = assessBudget(lastUsageInput, budgetWindow, run.budget)
+            run.budget = budget.state
+            if (budget.remind) {
+              this.log.warn('budget.reminder', {
+                sessionId,
+                index: budget.index,
+                usedInput: lastUsageInput,
+                window: budgetWindow
+              })
+              this.emit({
+                type: 'notice',
+                sessionId,
+                level: 'info',
+                text: `上下文已用约 ${Math.round((1 - (budget.remainingRatio ?? 0)) * 100)}%，已提醒模型收着做；可随时手动压缩。`
+              })
+            }
+            const out = {
+              ...raw,
+              content: withHint(withHint(raw.content, verdict.hint), budget.hint)
+            }
 
             const toolMessage: ToolMessage = {
               role: 'tool',
@@ -706,10 +730,6 @@ export class AgentRunner {
 
           if (run.abort.signal.aborted) {
             status = 'aborted'
-            break
-          }
-          if (stuckStop) {
-            status = 'stuck'
             break
           }
           continue

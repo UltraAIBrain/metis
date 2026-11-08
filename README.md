@@ -95,7 +95,8 @@ pidesktop/
     │       ├── prompt.ts        # 极简提示词 + AGENTS/SOUL/USER/记忆/技能/插件注入
     │       ├── memory-store.ts  # MEMORY.md 读写、检索式注入、图谱与全息出处
     │       ├── sanitize.ts      # 补齐未配对的 tool_use / tool_result
-    │       ├── stuck-guard.ts   # 空转检测：同参数同结果 → 提醒 / 判定停止（无步数上限）
+    │       ├── stuck-guard.ts   # 空转检测：同参数同结果 / 连续失败 / 交替 → 只提醒
+    │       ├── budget-guard.ts  # 上下文预算提醒（对齐 Codex RolloutBudget）
     │       ├── diff.ts          # 行级 diff（给 edit 用）
     │       ├── errors.ts        # 错误分类与用户提示
     │       ├── tools/           # 10 个内置工具 + 路径守卫
@@ -499,11 +500,13 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 32. 闭环学习：记忆分词检索（拉丁 + CJK 2-gram、相关条目排最前）、超限检索式注入（相关 + 最新、长度受控）、
     nudge 触发与消除、技能 write/list/read、fetch 的 HTML 正文提取与非 http 拒绝、
     USER.md / SOUL.md / 技能索引注入 system prompt；
-33. 空转检测：参数指纹与结果指纹（键序无关、bash footer 耗时被抹掉、退出码/isError 参与指纹）、
-    四种模式各自的阈值（1–2 次不动作、3 次 nudge、4 次 stop、同参数但结果变化不算空转、
-    连续失败 3 次提醒且第 4 次不刷屏、A→B→A→B 交替 4 步不动作 / 6 步提醒）、
-    端到端跑完全相同的调用（第 3 次提醒进 tool 结果、第 4 次带空转判定、前两次无噪音、
-    `run_end.status === stuck`、用户侧收到 warn + error 两条）；
+33. 空转提醒与预算提醒（都只提醒，不中止）：
+    参数/结果指纹（键序无关、bash footer 耗时被抹掉、isError 参与）、
+    同参数同结果 3 次不动作 / 4 次提醒 / 5–7 次不刷屏 / 8 次再提醒、同参数但结果变化不提醒、
+    连续失败 2 次不动作 / 3 次提醒 / 4 次不刷屏、A→B→A→B 4 步不动作 / 6 步提醒、A==B 不误报交替；
+    预算提醒窗口未知不判断、剩余 80% 不提醒、50%/25%/10% 三档各提醒一次且不重复不回退、
+    端到端跑 10 次相同调用（第 4/8 次各提醒一次、跑完模型自己收尾、`run_end.status` 始终为 `done`）、
+    端到端预算（窗口设 1000、usage 递增，第 3/4/5 次各触发一档、用户侧三条 info、运行不中止）；
 34. ZCode 借鉴：插件 beforeTool 钩子（deny/modify/放行 + executeTool 全链路）、ask 桥（投递/回填/结果）、
     cron（解析/匹配/OR 语义/非法拒绝）、跨会话检索（命中与空查询）、chart（解析/拒绝坏数据/几何/折线 path）。
 
@@ -522,27 +525,41 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 - **不设步数上限**：一轮任务跑多少步由模型自己决定，循环的终止条件只有「模型不再调用工具」和用户 `Esc`。
   步数是与任务难度无关的代理指标（改一处代码 3 步、大重构 60 步都正常），拿它当闸门只会误杀长任务。
   真正会杀死任务的是上下文窗口，由状态栏的占用比例 + 手动压缩兜底。
-- **空转检测（stuck guard）**：真正值得报警的是「这一步有没有产生新信息」，不是跑了多少步。
-  判据与主流对齐（下表为源码/官方文档核实的结果）：
+- **不设步数上限**：一轮任务跑多少步由模型自己决定，循环的终止条件只有「模型不再调用工具」和用户 `Esc`。
+  步数与任务难度无关（改一处代码 3 步、大重构 60 步都正常），拿它当闸门只会误杀长任务。
+  这也是 Codex / Claude Code 的做法：Codex CLI 与 Claude Code CLI 都没有轮次上限（Claude 的 Agent SDK 才有 opt-in `maxTurns`）。
+- **防失控靠两条协作式信号，不靠拦截**：真正的硬约束是上下文窗口，所以把「还剩多少」直接告诉模型，由它自己收尾。
 
-  | 项目 | 判据 | 处置 |
+  **1) 上下文预算提醒**（对齐 Codex 的 `RolloutBudget`）：
+
+  ```rust
+  // codex-rs/core/src/rollout_budget.rs
+  let reminder_index = config.reminder_at_remaining_tokens
+      .iter().filter(|&&t| remaining_tokens <= t).count();  // 每个阈值只提醒一次
+  ```
+
+  本项目在剩余 50% / 25% / 10% 各提醒一次（≈ 已用 50% / 75% / 90%，与状态栏阈值对齐），
+  `delivered` 计数器保证同一档不重复、也不会回退。提醒追加在 tool 结果末尾，
+  措辞分两档：半程只说「收着做」，最后一档明确要求「优先收尾」。
+
+  **2) 空转提醒**（stuck guard，**只提醒，绝不中止**）：
+
+  判据不是步数，而是「这一步有没有产生新信息」，维度取自 OpenHands SDK 与 Cline：
+
+  | 模式 | 阈值 | 来源 |
   | --- | --- | --- |
-  | OpenHands SDK | 同 action + **同 observation**（4）、action+error（3）、monologue（3）、A→B→A→B 交替（6），窗口按最后一条 user 消息切 | action-error 只 nudge；`is_stuck()` → `execution_status=STUCK` 停止 |
-  | Cline | **按错误**：api_error / invalid_tool_call / tool_execution_failed | 到限后问用户「换个思路 / 停止」 |
-  | Claude Code | 无内置重复检测 | 只封自己制造的循环（stop hook 连击 8 次、compact thrashing） |
-  | Codex CLI | 无（源码 0 命中轮次/重复检测） | 用户中断 + 上下文窗口 + 审批/sandbox |
+  | 同参数 + 同结果 | 4（到阈值后每 4 次再提） | OpenHands `action_observation=4` |
+  | 连续失败（不看参数是否相同） | 3（每 3 次再提） | OpenHands `action_error=3` / Cline `maxConsecutiveMistakes` |
+  | A→B→A→B 交替 | 6（每 6 次再提） | OpenHands `alternating_pattern=6` |
 
-  本项目的实现分两档，判据只有「有没有新信息」：
+  实现细节：参数指纹按键名递归排序（`{path, limit}` 与 `{limit, path}` 同一次）；
+  结果指纹抹掉 bash footer 里的耗时（否则同命令同输出永远判成「结果不同」，永不触发）；
+  **同参数但结果在变不算空转**（读正在被改的文件是有进展的）；A==B 归 identical 管、不报交替；
+  用户注入 steering 时窗口清空（对齐 OpenHands 按最后一条 user 消息切窗口）；主循环与子智能体各持一份。
 
-  - **nudge（只提醒，继续跑）**：同参数同结果连续 3 次 / 连续失败 3 次（不看参数是否相同）/ A→B→A→B 交替 6 次。
-    提醒追加在 tool 结果末尾（模型下一步必然读到，且不破坏 tool_use / tool_result 配对）。
-  - **stop（结束本次 run）**：**同参数 + 同结果连续 4 次**——这是唯一「再试一次也不会变」的铁证。
-    此时 `run_end.status = stuck`，会话保留，补充信息后继续即可。
-
-  几个实现细节：参数指纹按键名递归排序（`{path, limit}` 与 `{limit, path}` 同指纹）；
-  结果指纹会把 bash footer 里的耗时抹掉（否则同命令同输出永远判成「结果不同」，停止线永不触发）；
-  **同参数但结果在变不算空转**（读一个正在被改的文件是有进展的，不该误伤）；
-  用户注入 steering 时窗口清空（与 OpenHands 按最后一条 user 消息切窗口一致）；主循环与子智能体各持一份。
+  > 为什么不做硬停：Codex 源码里没有行为级轮次/重复检测，Claude Code 的硬停只针对**它自己制造的**循环
+  > （stop hook 连击 8 次、compact 反复 thrashing 后报错）。空转该由模型自己判断要不要换思路，
+  > 用户随时可以 `Esc` 接管。
 - **上下文占用的分母按「接口 → 内置表」取值**：模型窗口优先用服务商 `/models` 返回的 `context_length`，
   只有接口没给时才回落到内置兜底表；否则像 `deepseek-flash`（接口 1M、表里泛化的 128K）这种会被算成 161%，
   封顶显示成常年的假 100%。鼠标悬停在占比上可看到「输入 token / 窗口 token」的原始数值。

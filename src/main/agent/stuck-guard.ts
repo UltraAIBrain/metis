@@ -1,23 +1,19 @@
 /**
- * 空转（stuck）检测。
+ * 空转检测（只提醒，不中止）。
  *
- * 设计参考主流编码智能体的真实做法（均为源码/官方文档核实）：
+ * 设计对齐 Codex / Claude Code 的做法——**它们都不做行为级硬停**：
+ * - Codex CLI：源码里没有轮次上限，也没有重复调用检测；真正的抓手是上下文预算提醒
+ *   （见 budget-guard.ts）与可选的 `enforce_limit`。
+ * - Claude Code：CLI 无轮次上限；硬停只针对**它自己制造的**循环（stop hook 连击 8 次、
+ *   compact 反复 thrashing 后报错），从不因为模型"想太多步"而停。
  *
- * | 项目 | 判据 | 处置 |
- * | --- | --- | --- |
- * | OpenHands SDK | 同 action + **同 observation**（阈值 4）、action+error（3）、
- * |   | monologue（3）、A→B→A→B 交替（6），窗口按最后一条 user 消息切 | action-error 只 nudge（注入一条 user 消息），
- * |   |   | `is_stuck()` → `execution_status = STUCK` 停止本次 run |
- * | Cline | **按错误**：api_error / invalid_tool_call / tool_execution_failed | 到限后让用户选「换个思路 / 停止」 |
- * | Claude Code | 无内置重复检测 | 只封自己制造的循环（stop hook 连击 8 次、compact thrashing） |
- * | Codex CLI | 无（源码 0 命中轮次/重复检测） | 用户中断 + 上下文窗口 + 审批/sandbox |
+ * 所以这里只做一件事：发现「这一步没带来新信息」时，把提示塞回给模型，让它自己决定换思路
+ * 还是收尾。循环的终止权始终在模型（不再调用工具）或用户（Esc）手里。
  *
- * 两条共同结论：
- * 1. **没人拿步数当闸门**——步数与任务难度无关，是大重构的误杀器。
- * 2. 判据看的是「有没有产生新信息」，并且**分两档**：可恢复的只提醒，铁证无进展的才停。
- *
- * 所以这里只做两件事：nudge（提醒换思路，继续跑）和 stop（结果证明再试也不会变）。
- * 任何情况下都不引入步数上限。
+ * 判据参考 OpenHands SDK 与 Cline 的维度（唯一被广泛实现的行为级信号）：
+ * - 同参数 + 同结果（OpenHands 的 action-observation 阈值 4）
+ * - 连续失败，不看参数是否相同（Cline 的 mistake 维度）
+ * - A→B→A→B 交替（OpenHands 的 alternating_pattern 阈值 6）
  */
 
 /** 一次工具调用的结果摘要（只保留判定需要的部分） */
@@ -30,10 +26,8 @@ export interface Outcome {
 }
 
 export interface StuckThresholds {
-  /** 同参数同结果连续几次开始提醒 */
+  /** 同参数同结果连续几次开始提醒；之后每隔这么多次再提醒 */
   nudgeIdentical: number
-  /** 同参数同结果连续几次判定为无进展并停止 */
-  stopIdentical: number
   /** 连续工具失败几次开始提醒（不看参数是否相同） */
   nudgeFailing: number
   /** A→B→A→B 交替循环连续几次开始提醒 */
@@ -42,13 +36,12 @@ export interface StuckThresholds {
 
 /**
  * 默认阈值。与主流对齐：
- * - 4 = OpenHands 的 action_observation 阈值（同 action 同 observation 判为卡死）
- * - 3 = OpenHands 的 action_error / Cline 的 maxConsecutiveMistakes
- * - 6 = OpenHands 的 alternating_pattern
+ * - 4 = OpenHands 的 action_observation 阈值（同 action 同 observation 判为卡住）
+ * - 3 = OpenHands 的 action_error 阈值 / Cline 的 maxConsecutiveMistakes
+ * - 6 = OpenHands 的 alternating_pattern 阈值
  */
 export const DEFAULTS: StuckThresholds = {
-  nudgeIdentical: 3,
-  stopIdentical: 4,
+  nudgeIdentical: 4,
   nudgeFailing: 3,
   nudgeAlternating: 6
 }
@@ -56,16 +49,14 @@ export const DEFAULTS: StuckThresholds = {
 export type StuckKind = 'identical' | 'failing' | 'alternating'
 
 export interface Verdict {
-  /** none = 正常；nudge = 只提醒；stop = 判定空转，结束本次 run */
-  action: 'none' | 'nudge' | 'stop'
   kind?: StuckKind
   /** 当前连续次数（用于文案与日志） */
   count: number
-  /** 给模型看的提醒正文；action=none 时为空 */
+  /** 给模型看的提醒正文；没有提醒时为空 */
   hint?: string
 }
 
-const NONE: Verdict = { action: 'none', count: 0 }
+const NONE: Verdict = { count: 0 }
 
 /** 递归按键名排序，保证 { a, b } 与 { b, a } 得到同一个指纹 */
 function sortKeys(value: unknown): unknown {
@@ -131,10 +122,10 @@ function sameOutcome(a: Outcome, b: Outcome): boolean {
 }
 
 /**
- * 判定当前是否空转。纯函数：给定同一段 history 永远得到同一结论，方便单测。
+ * 判定当前是否该提醒。纯函数：给定同一段 history 永远得到同一结论，方便单测。
  *
- * 优先级：stop > nudge。stop 的判据只有一条——**同参数 + 同结果**连续到阈值，
- * 这是唯一「再试一次也不会变」的铁证；其余模式都只提醒，交回给模型决定。
+ * 提醒节奏是「到阈值 + 每 N 次再提醒一次」，避免每一轮都刷屏；
+ * 但**永远不中止**——不产生任何 stop 语义。
  */
 export function assess(history: Outcome[], thresholds: Partial<StuckThresholds> = {}): Verdict {
   const t = { ...DEFAULTS, ...thresholds }
@@ -142,38 +133,26 @@ export function assess(history: Outcome[], thresholds: Partial<StuckThresholds> 
 
   const last = history[history.length - 1]
 
-  // 1) 同参数同结果：铁证无进展 → 停止
+  // 1) 同参数同结果：最明确的「没有新信息」
   const identicalCount = trailingRun(history, (o) => sameOutcome(o, last))
-  if (identicalCount >= t.stopIdentical) {
-    return {
-      action: 'stop',
-      kind: 'identical',
-      count: identicalCount,
-      hint: identicalHint(last.key, identicalCount, true)
-    }
-  }
-
-  // 2) 同参数同结果未到停止线：先提醒
   if (identicalCount >= t.nudgeIdentical && identicalCount % t.nudgeIdentical === 0) {
     return {
-      action: 'nudge',
       kind: 'identical',
       count: identicalCount,
-      hint: identicalHint(last.key, identicalCount, false)
+      hint: identicalHint(last.key, identicalCount)
     }
   }
 
-  // 3) 连续失败：不看参数是否相同（Cline 的维度——换了参数仍然连续失败也是卡住）
+  // 2) 连续失败：不看参数是否相同（换了参数仍然连续失败也是卡住）
   const failingCount = trailingRun(history, (o) => o.isError)
   if (failingCount >= t.nudgeFailing && failingCount % t.nudgeFailing === 0) {
-    return { action: 'nudge', kind: 'failing', count: failingCount, hint: failingHint(failingCount) }
+    return { kind: 'failing', count: failingCount, hint: failingHint(failingCount) }
   }
 
-  // 4) A→B→A→B 交替循环：两个结果都各自重复，整体在原地打转
+  // 3) A→B→A→B 交替循环：两个结果都各自重复，整体在原地打转
   const alternatingCount = periodTwoRun(history)
   if (alternatingCount >= t.nudgeAlternating && alternatingCount % t.nudgeAlternating === 0) {
     return {
-      action: 'nudge',
       kind: 'alternating',
       count: alternatingCount,
       hint: alternatingHint(history, alternatingCount)
@@ -189,10 +168,18 @@ export function assess(history: Outcome[], thresholds: Partial<StuckThresholds> 
  * 循环里每个匹配的位置贡献 1，但最早的那两个元素（i 减到 2 时对应的 i 与 i-2）
  * 本身也属于这个循环 —— 所以真实长度是匹配数 + 2。
  * 例：[A,B,A,B] 匹配 2 次 → 长度 4；[A,B,A,B,A,B] 匹配 4 次 → 长度 6。
+ *
+ * 必须排除 A == B：连续 10 次同一个调用也满足「相隔两步相等」，但它属于
+ * identical 模式（一个动作原地重复），说成「两个动作交替」是错的描述。
  */
 function periodTwoRun(history: Outcome[]): number {
+  const n = history.length
+  if (n < 4) return 0
+  // 交替的前提：相邻两个结果确实不同
+  if (sameOutcome(history[n - 1], history[n - 2])) return 0
+
   let matched = 0
-  for (let i = history.length - 1; i >= 2; i--) {
+  for (let i = n - 1; i >= 2; i--) {
     if (!sameOutcome(history[i], history[i - 2])) break
     matched++
   }
@@ -204,15 +191,13 @@ function toolNameOf(key: string): string {
   return cut > 0 ? key.slice(0, cut) : key
 }
 
-function identicalHint(key: string, count: number, stop: boolean): string {
+function identicalHint(key: string, count: number): string {
   const tool = toolNameOf(key)
-  const head = stop
-    ? `[空转判定] ${tool} 已经连续 ${count} 次用完全相同的参数得到完全相同的结果。`
-    : `[重复调用提醒] 这是连续第 ${count} 次用完全相同的参数调用 ${tool}，且结果没有变化。`
-  const body = stop
-    ? '再试一次也不会得到新信息，本次运行到此为止。请换一种思路，或直接告诉用户卡在哪里。'
-    : '如果这一步本来就不会产生新信息，换一种做法（改参数 / 换工具 / 先读报错），或者停下来向用户说明卡在哪里。此提醒不中断运行，下一步怎么做由你决定。'
-  return `${head}${body}`
+  return [
+    `[重复调用提醒] 这是连续第 ${count} 次用完全相同的参数调用 ${tool}，且结果没有变化。`,
+    '如果这一步本来就不会产生新信息，换一种做法（改参数 / 换工具 / 先读报错），或者停下来向用户说明卡在哪里。',
+    '此提醒不中断运行，下一步怎么做由你决定。'
+  ].join('')
 }
 
 function failingHint(count: number): string {

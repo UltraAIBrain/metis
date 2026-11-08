@@ -313,34 +313,73 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
         }
 
         // 空转检测：每轮都发完全相同的 read(demo/hello.txt)，结果恒定不变。
-        // 第 3 次应只提醒，第 4 次判定空转并停止（对齐 OpenHands 的 action+observation 阈值 4）。
+        // 第 4 次与第 8 次各提醒一次；靠模型自己收尾，runner 不得中止（对齐 Codex / Claude Code）。
         if (model0 === 'mock-stuck') {
-          send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
-          send({
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  tool_calls: [
-                    {
-                      index: 0,
-                      id: `call_stuck_${assistantTurns}`,
-                      type: 'function',
-                      function: { name: 'read', arguments: JSON.stringify({ path: 'demo/hello.txt' }) }
-                    }
-                  ]
+          if (assistantTurns < 10) {
+            send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: `call_stuck_${assistantTurns}`,
+                        type: 'function',
+                        function: { name: 'read', arguments: JSON.stringify({ path: 'demo/hello.txt' }) }
+                      }
+                    ]
+                  }
                 }
-              }
-            ]
-          })
-          send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
-          send({ choices: [], usage: { prompt_tokens: 40, completion_tokens: 6 } })
+              ]
+            })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+            send({ choices: [], usage: { prompt_tokens: 40, completion_tokens: 6 } })
+          } else {
+            send({ choices: [{ index: 0, delta: { content: '收到重复提醒，收尾。' } }] })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+            send({ choices: [], usage: { prompt_tokens: 60, completion_tokens: 8 } })
+          }
           res.write('data: [DONE]\n\n')
           res.end()
           return
         }
 
         // 附件测试用：直接回文本，不调用工具
+        // 预算提醒：每轮递增 prompt_tokens，配合 contextWindow=1000 逐档触发
+        if (model0 === 'mock-budget') {
+          if (assistantTurns < 5) {
+            send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: `call_budget_${assistantTurns}`,
+                        type: 'function',
+                        function: { name: 'read', arguments: JSON.stringify({ path: 'demo/hello.txt' }) }
+                      }
+                    ]
+                  }
+                }
+              ]
+            })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+            send({ choices: [], usage: { prompt_tokens: 200 * (assistantTurns + 1), completion_tokens: 5 } })
+          } else {
+            send({ choices: [{ index: 0, delta: { content: '预算提醒收到，收尾。' } }] })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+            send({ choices: [], usage: { prompt_tokens: 950, completion_tokens: 5 } })
+          }
+          res.write('data: [DONE]\n\n')
+          res.end()
+          return
+        }
+
         if (model0 === 'mock-plain') {
           send({ choices: [{ index: 0, delta: { content: '收到。' } }] })
           send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
@@ -1196,7 +1235,7 @@ async function main(): Promise<void> {
   check('不再出现步数相关的停止提示', capNoise.length === 0, JSON.stringify(capNoise))
   const longEnd = longEvents.find((e) => e.type === 'run_end')
   check('跑到模型自己收尾才结束', longEnd?.type === 'run_end' && longEnd.status === 'done', JSON.stringify(longEnd))
-  console.log('\n[13d] 空转检测（纯函数）')
+  console.log('\n[13d] 空转检测（纯函数，只提醒不中止）')
   const { assess, callKey, canonicalInput, resultDigest, stabilizeResult, DEFAULTS } = await import(
     '../src/main/agent/stuck-guard'
   )
@@ -1216,34 +1255,29 @@ async function main(): Promise<void> {
   const bashA = resultDigest(`${"x".repeat(20)}\n\n[exit 0 · 0.3s]`, false)
   const bashB = resultDigest(`${"x".repeat(20)}\n\n[exit 0 · 1.9s]`, false)
   check('footer 里的耗时不影响结果指纹', bashA === bashB, `${bashA} vs ${bashB}`)
-  check('退出码不同则指纹不同', resultDigest('out\n\n[exit 0 · 0.3s]', false) !== resultDigest('out\n\n[exit 1 · 0.3s]', false))
   check('超时标记会被保留', stabilizeResult('out\n\n[exit killed · 超时 120s 已终止 · 120.0s]').includes('超时'))
   check('isError 参与指纹', ok('same') !== bad('same'))
-  check(
-    '非 bash 内容原样参与指纹',
-    resultDigest('hello', false) !== resultDigest('hello2', false)
-  )
 
-  // 模式 1：同参数同结果 —— 第 3 次提醒，第 4 次判定空转停止（对齐 OpenHands 阈值 4）
+  // 模式 1：同参数同结果 —— 到阈值提醒（阈值 4，对齐 OpenHands 的 action+observation）
   const key = callKey('read', { path: 'a.txt' })
   const same = (n: number) => Array.from({ length: n }, () => ({ key, digest: ok("hello"), isError: false }))
-  check('1 次：不动作', assess(same(1)).action === 'none')
-  check('2 次：仍不动作', assess(same(2)).action === 'none')
-  check('3 次：只提醒（nudge）', assess(same(3)).action === 'nudge' && assess(same(3)).kind === 'identical')
-  check('4 次：判定空转（stop）', assess(same(4)).action === 'stop', JSON.stringify(assess(same(4))))
+  check('3 次：还没到阈值，不提醒', assess(same(3)).hint === undefined)
+  check('4 次：提醒', Boolean(assess(same(4)).hint) && assess(same(4)).kind === 'identical')
+  check('5/6/7 次：不重复刷屏', assess(same(5)).hint === undefined && assess(same(7)).hint === undefined)
+  check('8 次：再提醒一次', Boolean(assess(same(8)).hint), String(assess(same(8)).count))
   check(
-    '停止线来自 DEFAULTS.stopIdentical',
-    DEFAULTS.stopIdentical === 4 && assess(same(DEFAULTS.stopIdentical)).action === 'stop'
+    '阈值来自 DEFAULTS.nudgeIdentical',
+    DEFAULTS.nudgeIdentical === 4 && assess(same(4)).hint !== undefined
   )
 
-  // 关键区别：参数相同但**结果不同** = 有进展，不报警（读正在变化的文件不该被误判）
+  // 关键：同参数但结果在变 = 有进展，绝不提醒
   const progressing = [
     { key, digest: ok("v1"), isError: false },
     { key, digest: ok("v2"), isError: false },
     { key, digest: ok("v3"), isError: false },
     { key, digest: ok("v4"), isError: false }
   ]
-  check('同参数但结果在变：不算空转', assess(progressing).action === 'none', JSON.stringify(assess(progressing)))
+  check('同参数但结果在变：不提醒', assess(progressing).hint === undefined)
 
   // 模式 2：连续失败（不看参数是否相同）—— Cline 的维度
   const failing = (n: number) =>
@@ -1252,12 +1286,12 @@ async function main(): Promise<void> {
       digest: bad(`error ${i}`),
       isError: true
     }))
-  check('连续 2 次失败：不动作', assess(failing(2)).action === 'none')
-  check('连续 3 次失败：提醒', assess(failing(3)).action === 'nudge' && assess(failing(3)).kind === 'failing')
-  check('连续 6 次失败：再提醒一次', assess(failing(6)).action === 'nudge')
-  check('连续 4 次失败：不重复刷屏', assess(failing(4)).action === 'none')
+  check('连续 2 次失败：不提醒', assess(failing(2)).hint === undefined)
+  check('连续 3 次失败：提醒', Boolean(assess(failing(3)).hint) && assess(failing(3)).kind === 'failing')
+  check('连续 4 次失败：不重复刷屏', assess(failing(4)).hint === undefined)
+  check('连续 6 次失败：再提醒', Boolean(assess(failing(6)).hint))
 
-  // 模式 3：A→B→A→B 交替循环（对齐 OpenHands alternating 阈值 6）
+  // 模式 3：A→B→A→B 交替循环（阈值 6，对齐 OpenHands 的 alternating_pattern）
   const ka = callKey("bash", { command: "npm run build" })
   const kb = callKey("read", { path: "log.txt" })
   const alternate = (n: number) =>
@@ -1266,19 +1300,19 @@ async function main(): Promise<void> {
         ? { key: ka, digest: ok("build failed"), isError: false }
         : { key: kb, digest: ok("same log"), isError: false }
     )
-  check('4 步交替：不动作', assess(alternate(4)).action === 'none')
-  check(
-    '6 步交替：提醒',
-    assess(alternate(6)).action === 'nudge' && assess(alternate(6)).kind === 'alternating',
-    JSON.stringify(assess(alternate(6)))
-  )
+  check('4 步交替：不提醒', assess(alternate(4)).hint === undefined)
+  check('6 步交替：提醒', Boolean(assess(alternate(6)).hint) && assess(alternate(6)).kind === 'alternating')
 
-  // 提示文案必须带上工具名与次数，模型才知道改什么
-  check('提醒里带工具名与次数', Boolean(assess(same(3)).hint?.includes('read') && assess(same(3)).hint?.includes('3')))
-  check('停止提示说明不会再变', Boolean(assess(same(4)).hint?.includes('不会')))
+  // A == B 时不算交替：那是「一个动作原地重复」，归 identical 管。
+  // （曾经漏了这个判断，连续 10 次同一个调用会在第 6 次误报「两个动作反复交替」。）
+  check('同一个调用重复 6 次不会被说成交替', assess(same(6)).hint === undefined, JSON.stringify(assess(same(6))))
+  check('同一个调用重复 8 次报的是 identical', assess(same(8)).kind === 'identical')
 
-  console.log('\n[13e] 空转检测（端到端）')
-  // mock-loop 每轮都返回完全相同的 tool 调用（read demo/hello.txt），结果也恒定
+  check('提醒里有工具名与次数', Boolean(assess(same(4)).hint?.includes('read') && assess(same(4)).hint?.includes('4')))
+  check('提醒明确写了不中断', Boolean(assess(same(4)).hint?.includes('不中断')))
+
+  console.log('\n[13e] 空转检测（端到端，不中止）')
+  // mock-stuck 每轮都发完全相同的 read，结果恒定；靠模型自己收尾，runner 不得中止
   const stuckSession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-stuck' })
   const stuckEvents: AgentEvent[] = []
   const stuckRunner = new AgentRunner(sessions, config, logger, (e) => stuckEvents.push(e))
@@ -1299,24 +1333,83 @@ async function main(): Promise<void> {
   const stuckTools = sessions
     .view(stuckSession.id)
     .messages.filter((m): m is ToolMessage => m.role === 'tool' && m.name === 'read')
-  check('跑到停止线就停（4 次调用，不是无限循环）', stuckTools.length === 4, `实际 ${stuckTools.length} 次`)
-  check('第 3 次的提醒进了 tool 结果', stuckTools[2]?.content.includes('重复调用提醒') === true)
-  check('第 4 次带空转判定说明', stuckTools[3]?.content.includes('空转判定') === true)
-  check('前两次没有任何噪音', !stuckTools[0]?.content.includes('提醒') && !stuckTools[1]?.content.includes('提醒'))
+  check('没被中止：跑到模型自己收尾（mock 共 10 轮）', stuckTools.length === 10, `实际 ${stuckTools.length} 次`)
+  check('第 4 次进了提醒', stuckTools[3]?.content.includes('重复调用提醒') === true)
+  check('第 8 次再提醒一次', stuckTools[7]?.content.includes('重复调用提醒') === true)
+  check('前 3 次没有噪音', !stuckTools[0]?.content.includes('提醒') && !stuckTools[2]?.content.includes('提醒'))
+  check('第 5/6/7 次也不刷屏', !stuckTools[4]?.content.includes('重复调用提醒') && !stuckTools[6]?.content.includes('重复调用提醒'))
 
   const stuckEnd = stuckEvents.find((e) => e.type === 'run_end')
-  check('结束状态是 stuck（不是 done / error）', stuckEnd?.type === 'run_end' && stuckEnd.status === 'stuck', JSON.stringify(stuckEnd))
+  check('结束状态是 done（空转不中止）', stuckEnd?.type === 'run_end' && stuckEnd.status === 'done', JSON.stringify(stuckEnd))
 
   const stuckNotices = stuckEvents.filter(
-    (e): e is Extract<AgentEvent, { type: 'notice' }> =>
-      e.type === 'notice' && (e.text.includes('同一调用连续') || e.text.includes('判定为空转'))
+    (e): e is Extract<AgentEvent, { type: 'notice' }> => e.type === 'notice' && e.text.includes('已提示模型换思路')
   )
-  check('用户侧收到提醒 + 停止两条', stuckNotices.length === 2, JSON.stringify(stuckNotices.map((n) => n.text)))
-  check('提醒是 warn，停止是 error', stuckNotices[0]?.level === 'warn' && stuckNotices[1]?.level === 'error', JSON.stringify(stuckNotices.map((n) => n.level)))
+  check('用户侧收到两条提醒', stuckNotices.length === 2, JSON.stringify(stuckNotices.map((n) => n.text)))
+  check('提醒级别统一是 warn', stuckNotices.every((n) => n.level === 'warn'))
+  check('没有 error 级 notice', !stuckEvents.some((e) => e.type === 'notice' && e.level === 'error'))
 
-  // 变量已被前面的用例占用：清掉，避免干扰后续
-  stuckSession.id = stuckSession.id
+  console.log('\n[13f] 上下文预算提醒（对齐 Codex RolloutBudget）')
+  const { assessBudget, BUDGET_THRESHOLDS } = await import('../src/main/agent/budget-guard')
+  const W = 100_000
 
+  check('窗口未知时不做任何判断', assessBudget(90_000, undefined).remind === false)
+  check('用量为 0 时不提醒', assessBudget(0, W).remind === false)
+  check('还剩 80%：不提醒', assessBudget(20_000, W).remind === false)
+  const b50 = assessBudget(50_000, W)
+  check('还剩 50%：第 1 档提醒', b50.remind && b50.index === 1, JSON.stringify(b50))
+  check('提醒里带剩余百分比', Boolean(b50.hint?.includes('50%')), b50.hint?.slice(0, 60))
+  check('同一档不重复提醒', assessBudget(52_000, W, b50.state).remind === false)
+  const b75 = assessBudget(75_000, W, b50.state)
+  check('还剩 25%：第 2 档提醒', b75.remind && b75.index === 2, JSON.stringify(b75))
+  const b90 = assessBudget(90_000, W, b75.state)
+  check('还剩 10%：第 3 档提醒', b90.remind && b90.index === 3, JSON.stringify(b90))
+  check('最后一档措辞更急', Boolean(b90.hint?.includes('优先收尾')), b90.hint?.slice(0, 80))
+  check('三档阈值与状态栏 75/90 对齐', BUDGET_THRESHOLDS.join(',') === '0.5,0.25,0.1', BUDGET_THRESHOLDS.join(','))
+  check('已经跨过的档位不会回退', assessBudget(95_000, W, b90.state).state.delivered === 3)
+
+  // 端到端：模型窗口设成 1000，mock 每轮递增 usage，应当逐档提醒
+  config.saveModels('deepseek', [{ id: 'mock-budget', contextWindow: 1000, maxOutput: 512 }])
+  const budgetSession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-budget' })
+  const budgetEvents: AgentEvent[] = []
+  const budgetRunner = new AgentRunner(sessions, config, logger, (e) => budgetEvents.push(e))
+  await new Promise<void>((resolve) => {
+    const timer = setInterval(() => {
+      if (budgetEvents.some((e) => e.type === 'run_end')) {
+        clearInterval(timer)
+        resolve()
+      }
+    }, 20)
+    setTimeout(() => {
+      clearInterval(timer)
+      resolve()
+    }, 60_000)
+    budgetRunner.send(budgetSession.id, '跑几步看看预算')
+  })
+
+  const budgetTools = sessions
+    .view(budgetSession.id)
+    .messages.filter((m): m is ToolMessage => m.role === 'tool' && m.name === 'read')
+  check('5 次工具调用都执行了', budgetTools.length === 5, `实际 ${budgetTools.length}`)
+  const hints = budgetTools.map((m) => (m.content.includes('[上下文预算]') ? 1 : 0))
+  check('预算提醒出现在第 3/4/5 次', hints.join(',') === '0,0,1,1,1', hints.join(','))
+  check('提醒里有剩余百分比', Boolean(budgetTools[2]?.content.includes('剩余约')), budgetTools[2]?.content.slice(-120))
+  check('最后一档措辞更急', Boolean(budgetTools[4]?.content.includes('优先收尾')))
+
+  const budgetNotices = budgetEvents.filter(
+    (e): e is Extract<AgentEvent, { type: 'notice' }> => e.type === 'notice' && e.text.includes('上下文已用')
+  )
+  check('用户侧也收到三档提醒', budgetNotices.length === 3, JSON.stringify(budgetNotices.map((n) => n.text)))
+  check('用户侧提醒是 info 级', budgetNotices.every((n) => n.level === 'info'))
+
+  const budgetEnd = budgetEvents.find((e) => e.type === 'run_end')
+  check('预算提醒不中止运行', budgetEnd?.type === 'run_end' && budgetEnd.status === 'done', JSON.stringify(budgetEnd))
+
+  // 恢复：别让工具元数据影响后续用例
+  config.saveModels('deepseek', [])
+
+
+  console.log('\n[13c] 上下文窗口解析（状态栏百分比）')
   console.log('\n[13c] 上下文窗口解析（状态栏百分比）')
   const { resolveContextWindow } = await import('../src/shared/model-catalog')
   // 复现过的真实事故：接口说 deepseek-flash 是 1M，内置表只有泛化的 128K，

@@ -156,14 +156,7 @@ function bootstrap(): void {
     if (win) win.webContents.send(IPC.event, event)
     // 窗口藏在托盘时，任务结束用气泡提醒（displayBalloon 仅 Windows；其它平台静默跳过）
     if (event.type === 'run_end' && (!win || !win.isVisible()) && tray) {
-      const tail =
-        event.status === 'done'
-          ? '已完成'
-          : event.status === 'aborted'
-            ? '已中止'
-            : event.status === 'stuck'
-              ? '已判定空转并停下'
-              : '出错结束'
+      const tail = event.status === 'done' ? '已完成' : event.status === 'aborted' ? '已中止' : '出错结束'
       try {
         tray.displayBalloon({
           iconType: 'info',

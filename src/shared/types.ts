@@ -330,13 +330,13 @@ export type AgentEvent =
    * status:
    * - done    模型不再调用工具，正常收尾
    * - aborted 用户中止（Esc）
-   * - stuck   判定为空转（同参数同结果反复），主动停下把控制权交回用户
    * - error   请求或配置错误
+   * 注意：没有 stuck —— 空转只提醒不中止（Codex / Claude Code 都不做行为级硬停）
    */
   | {
       type: 'run_end'
       sessionId: string
-      status: 'done' | 'aborted' | 'stuck' | 'error'
+      status: 'done' | 'aborted' | 'error'
       error?: AgentError
     }
 
