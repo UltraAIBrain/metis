@@ -155,6 +155,8 @@ export interface SessionView {
   model?: string
   /** 该会话的思考强度；为空表示沿用全局默认 */
   thinking?: ThinkingEffort
+  /** 该会话的单轮步数上限；为空表示沿用全局默认 */
+  maxSteps?: number
   messages: Message[]
   branch: Record<string, BranchInfo>
 }

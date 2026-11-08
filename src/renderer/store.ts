@@ -394,6 +394,24 @@ class Store {
     }
   }
 
+  /** 切换当前会话的单轮步数上限；undefined = 恢复跟随全局默认 */
+  async setSessionSteps(maxSteps: number | undefined): Promise<void> {
+    const session = this.state.session
+    if (!session) return
+    if (session.id === DRAFT_ID) {
+      this.set({ session: { ...session, maxSteps } })
+      return
+    }
+    const navigation = this.navigationSeq
+    try {
+      const view = await window.pi.setSessionSteps(session.id, maxSteps ?? null)
+      if (navigation !== this.navigationSeq || this.currentId !== session.id) return
+      this.set({ session: view })
+    } catch (err) {
+      this.notify('error', `切换步数上限失败：${(err as Error).message}`)
+    }
+  }
+
   /** 拉取某家提供商的模型列表，结果同时写进内存缓存 */
   async loadModels(profile: PublicProfile): Promise<ModelListResult> {
     const request = (this.modelSeq.get(profile.id) ?? 0) + 1

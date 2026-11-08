@@ -16,6 +16,8 @@ export const IPC = {
   sessionSwitch: 'session:switch',
   sessionModel: 'session:model',
   sessionThinking: 'session:thinking',
+  /** 会话级单轮步数上限（null = 跟随全局默认） */
+  sessionSteps: 'session:steps',
   sessionPin: 'session:pin',
   sessionReveal: 'session:reveal',
   sessionTrajectory: 'session:trajectory',

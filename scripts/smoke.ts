@@ -268,6 +268,33 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
           return
         }
 
+        // 步数上限测试用：每一轮都再调一次 bash，直到 runner 主动停下
+        if (model0 === 'mock-loop') {
+          send({ choices: [{ index: 0, delta: { role: 'assistant', content: '继续。' } }] })
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: `call_loop_${assistantTurns}`,
+                      type: 'function',
+                      function: { name: 'bash', arguments: JSON.stringify({ command: 'echo loop' }) }
+                    }
+                  ]
+                }
+              }
+            ]
+          })
+          send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+          send({ choices: [], usage: { prompt_tokens: 50, completion_tokens: 8 } })
+          res.write('data: [DONE]\n\n')
+          res.end()
+          return
+        }
+
         // 附件测试用：直接回文本，不调用工具
         if (model0 === 'mock-plain') {
           send({ choices: [{ index: 0, delta: { content: '收到。' } }] })
@@ -1091,6 +1118,40 @@ async function main(): Promise<void> {
   await runOnce(thinkSession.id, '跑一下')
   check('会话级思考强度进入请求', seenEffort[0] === 'max', seenEffort.join(','))
 
+  console.log('\n[13b] 会话级步数上限')
+  const stepsSession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-loop' })
+  check('步数默认跟随全局', sessions.view(stepsSession.id).maxSteps === undefined)
+  sessions.setMaxSteps(stepsSession.id, 5)
+  check('可写入会话 meta', sessions.view(stepsSession.id).maxSteps === 5)
+
+  const stepsEvents: AgentEvent[] = []
+  const stepsRunner = new AgentRunner(sessions, config, logger, (e) => stepsEvents.push(e))
+  await new Promise<void>((resolve) => {
+    const timer = setInterval(() => {
+      if (stepsEvents.some((e) => e.type === 'run_end')) {
+        clearInterval(timer)
+        resolve()
+      }
+    }, 20)
+    setTimeout(() => {
+      clearInterval(timer)
+      resolve()
+    }, 20_000)
+    stepsRunner.send(stepsSession.id, '一直继续')
+  })
+
+  const looped = sessions.view(stepsSession.id).messages.filter((m) => m.role === 'assistant').length
+  check('会话级上限生效（5 步就停）', looped === 5, `assistant=${looped}`)
+  const capNotice = stepsEvents.find(
+    (e) => e.type === 'notice' && e.level === 'warn' && e.text.includes('已达单轮最大步数（5）')
+  )
+  check('达上限有可读提示', Boolean(capNotice), JSON.stringify(stepsEvents.filter((e) => e.type === 'notice')))
+  const capEnd = stepsEvents.find((e) => e.type === 'run_end')
+  check('达上限不是错误结束', capEnd?.type === 'run_end' && capEnd.status === 'done', JSON.stringify(capEnd))
+
+  // 恢复跟随全局（配置里是 8）：同一个模型应该跑到 8 步
+  sessions.setMaxSteps(stepsSession.id, undefined)
+  check('可恢复跟随全局', sessions.view(stepsSession.id).maxSteps === undefined)
   console.log('\n[21] 附件')
   const { stageAttachment, validAttachmentsFor, removeSessionAttachments, sessionAttachmentsDir, MAX_ATTACHMENTS } =
     await import('../src/main/attachments')

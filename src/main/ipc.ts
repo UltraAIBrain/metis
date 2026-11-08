@@ -176,6 +176,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return ctx.sessions.view(id)
   })
 
+  /** 会话级单轮步数上限；null / 非正数 = 恢复跟随全局默认 */
+  ipcMain.handle(IPC.sessionSteps, (_e, rawId: string, raw: number | null): SessionView => {
+    const id = assertSessionId(rawId)
+    const n = Number(raw)
+    const value = Number.isFinite(n) && n > 0 ? Math.round(Math.min(200, Math.max(1, n))) : undefined
+    ctx.sessions.setMaxSteps(id, value)
+    logger.info('session.steps_changed', { id, maxSteps: value ?? '(global)' })
+    return ctx.sessions.view(id)
+  })
+
   ipcMain.handle(IPC.sessionPin, (_e, rawId: string, pinned: boolean): SessionSummary[] => {
     const id = assertSessionId(rawId)
     ctx.sessions.setPinned(id, Boolean(pinned))
