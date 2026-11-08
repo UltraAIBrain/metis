@@ -1,0 +1,49 @@
+appId: dev.pidesktop.app
+productName: Pi Desktop
+copyright: MIT Licensed
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+
+# 托盘图标（主进程按 resources/icon.png 读取）
+extraResources:
+  - from: build/icon.png
+    to: icon.png
+
+asar: true
+compression: normal
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Pi Desktop
+
+mac:
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  icon: build/icon.png
+  target:
+    - AppImage
+  category: Development
+  artifactName: ${productName}-${version}-${arch}.${ext}

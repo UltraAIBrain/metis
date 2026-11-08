@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="plate" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#25252b"/>
+      <stop offset="0.55" stop-color="#131316"/>
+      <stop offset="1" stop-color="#08080a"/>
+    </linearGradient>
+
+    <radialGradient id="lift" cx="0.34" cy="0.04" r="0.95">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.02"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="shade" x1="0" y1="0.5" x2="0" y2="1">
+      <stop offset="0" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.24"/>
+    </linearGradient>
+
+    <linearGradient id="ink" x1="0" y1="335" x2="0" y2="689" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.62" stop-color="#f6f6fa"/>
+      <stop offset="1" stop-color="#e2e2ec"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 黑色底板 -->
+  <rect x="52" y="52" width="920" height="920" rx="212" fill="url(#plate)"/>
+  <rect x="52" y="52" width="920" height="920" rx="212" fill="url(#shade)"/>
+  <rect x="52" y="52" width="920" height="920" rx="212" fill="url(#lift)"/>
+  <rect x="54" y="54" width="916" height="916" rx="210" fill="none" stroke="#ffffff" stroke-opacity="0.09" stroke-width="2"/>
+
+  <!-- π -->
+  <g fill="none" stroke="url(#ink)" stroke-width="82" stroke-linecap="round">
+    <path d="M292 376H732"/>
+    <path d="M398 376V648"/>
+    <path d="M626 376V648"/>
+  </g>
+</svg>

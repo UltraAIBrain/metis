@@ -1,0 +1,1172 @@
+/* 会话区右侧的功能面板 */
+
+.app.with-panel {
+  grid-template-columns: var(--sidebar-w, 264px) minmax(0, 1fr) var(--panel-w, 276px);
+}
+
+@media (max-width: 1100px) {
+  .app.with-panel {
+    grid-template-columns: var(--sidebar-w, 264px) minmax(0, 1fr) var(--panel-w, 236px);
+  }
+}
+
+@media (max-width: 1000px) {
+  .app.with-panel {
+    grid-template-columns: var(--sidebar-w, 264px) minmax(0, 1fr) var(--panel-w, 220px);
+  }
+}
+
+/* 完整视图：面板接管聊天区（放在媒体查询之后，同特异性覆盖三列布局） */
+.app.full-panel .main {
+  display: none;
+}
+
+.app.with-panel.full-panel {
+  grid-template-columns: var(--sidebar-w, 264px) minmax(0, 1fr);
+}
+
+/* 面板左缘拖拽手柄：right 偏移与上面三处面板列宽保持同步 */
+.pane-split-panel {
+  right: var(--panel-w, 276px);
+}
+
+@media (max-width: 1100px) {
+  .pane-split-panel {
+    right: var(--panel-w, 236px);
+  }
+}
+
+@media (max-width: 1000px) {
+  .pane-split-panel {
+    right: var(--panel-w, 220px);
+  }
+}
+
+.app.with-panel.full-panel .side-panel {
+  grid-column: 2;
+}
+
+.side-panel {
+  grid-column: 3;
+  grid-row: 1;
+  position: relative; /* 标签列表弹层的定位基准 */
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  padding: 0 0 20px;
+}
+
+/* ------------------------------ 动作区 ------------------------------ */
+/* 「新标签页」起始页：品牌头 → 动作列表 → 产物区（同一列，顶流不居中） */
+
+.panel-menu-page {
+  margin: 32px 0 0;
+}
+
+/* 品牌头：π 徽标 + 当前项目目录名，标明面板服务的是哪个项目 */
+.panel-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 6px 13px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.panel-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--brand-grad);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
+  box-shadow: var(--brand-shadow);
+}
+
+.panel-brand-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.panel-actions {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.panel-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 19px 18px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.panel-action:hover {
+  background: var(--panel);
+}
+
+.panel-action svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--text-2);
+}
+
+/* 完整视图：起始页收成水平居中的窄列 + 顶部大留白 */
+.side-panel.panel-full {
+  --menu-col: min(580px, calc(100% - 128px));
+}
+
+.side-panel.panel-full .panel-menu-page {
+  width: var(--menu-col);
+  margin: 150px auto 0;
+}
+
+.side-panel.panel-full .panel-action {
+  padding: 19px 6px;
+}
+
+.side-panel.panel-full .panel-section {
+  margin-top: 26px;
+}
+
+.side-panel.panel-full .panel-section .panel-section-head {
+  padding: 2px 6px 8px;
+}
+
+.side-panel.panel-full .panel-section .panel-file-row {
+  padding: 8px 6px;
+  font-size: 13.5px;
+}
+
+.side-panel.panel-full .panel-section .panel-empty {
+  padding: 8px 6px;
+}
+
+/* ------------------------------ 变更视图 ------------------------------ */
+
+/* 视图头：标题 + 刷新（agent 写过文件后手动刷新变更列表） */
+.panel-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 18px 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.panel-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.panel-refresh:hover:not(:disabled) {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.panel-refresh:disabled {
+  cursor: default;
+}
+
+.panel-refresh:disabled svg {
+  animation: panel-spin 0.9s linear infinite;
+}
+
+@keyframes panel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.panel-changes-list {
+  padding: 6px 0;
+}
+
+.panel-change {
+  border-bottom: 1px solid var(--border);
+}
+
+.change-status {
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  border-radius: 4px;
+  padding: 0 5px;
+  min-width: 30px;
+  text-align: center;
+}
+
+.change-status.mod {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+.change-status.add {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.change-status.del {
+  color: var(--err);
+  background: var(--err-soft);
+}
+
+.change-status.untracked {
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.panel-diff {
+  padding: 0 12px 10px 18px;
+  overflow-x: auto;
+}
+
+.panel-diff .diff {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+/* ------------------------------ 产物 ------------------------------ */
+
+.panel-section {
+  margin-top: 14px;
+}
+
+.panel-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 2px 18px 8px;
+  border: 0;
+  background: transparent;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.panel-section-head:hover {
+  color: var(--text-2);
+}
+
+.panel-section-head .chevron {
+  transition: transform 0.12s;
+}
+
+.panel-section-head .chevron.open {
+  transform: rotate(180deg);
+}
+
+.panel-artifacts {
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 18px;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.panel-file-row:hover {
+  background: var(--panel);
+}
+
+.panel-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-kind {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 产物文件图标 */
+.file-glyph {
+  flex: none;
+}
+
+.glyph-md {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  background: #0e9f9f;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.glyph-img {
+  color: #3b82f6;
+}
+
+.glyph-code {
+  color: #16a34a;
+}
+
+.glyph-page {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1;
+}
+
+.panel-empty {
+  padding: 8px 18px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ------------------------------ 标签栏（窄面板与完整视图共用） ------------------------------ */
+
+/* 标签栏：高度与中部顶栏一致（46px + 同款底边线）；
+   灰底条 + 白色激活卡片，与左侧栏（灰容器 + 白色选中行）同一套视觉语言 */
+.panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 46px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-tabs-scroll {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto; /* 折叠兜底：极端情况下仍放不下时只有芯片区滚动 */
+  scrollbar-width: none;
+}
+
+.panel-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.panel-tabs-trail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+/* 「⌄」标签列表按钮与弹层：搜索 + 全部已开标签（相对时间 + 行内关闭） */
+.panel-tablist-btn {
+  position: relative; /* 折叠角标的定位基准 */
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.panel-tablist-btn:hover,
+.panel-tablist-btn.active {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
+
+/* 折叠数量角标：有标签被折进列表时显示在 ⌄ 右上角（中性灰，不带强调色） */
+.panel-tablist-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--border-strong);
+  color: var(--text);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 13px;
+  text-align: center;
+}
+
+.tablist-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+}
+
+.tablist-pop {
+  position: absolute;
+  top: 44px;
+  left: 6px;
+  z-index: 46;
+  display: flex;
+  flex-direction: column;
+  width: 272px;
+  max-height: calc(100% - 60px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+}
+
+.tablist-search {
+  margin: 8px 8px 4px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.tablist-search:focus {
+  border-color: var(--text-2);
+}
+
+.tablist-head {
+  padding: 2px 12px 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.tablist-rows {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 6px;
+}
+
+.tablist-row {
+  display: flex;
+  align-items: center;
+  border-radius: 7px;
+}
+
+.tablist-row:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.tablist-row.active {
+  background: var(--panel);
+}
+
+.tablist-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tablist-open svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+.tablist-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tablist-time {
+  flex: none;
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.tablist-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tablist-close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.tablist-empty {
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ------------------------------ 轨迹检查器 ------------------------------ */
+
+.trace-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.trace-list {
+  padding: 4px 8px 16px;
+}
+
+.trace-turn {
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.trace-turn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: var(--panel-soft);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.trace-turn-head:hover {
+  background: var(--panel);
+}
+
+.trace-turn-no {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.trace-turn-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-turn-stats {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.trace-turn-body {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trace-text {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.trace-error {
+  font-size: 12.5px;
+  color: var(--err);
+}
+
+.trace-step {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.trace-step summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.trace-step summary::-webkit-details-marker {
+  display: none;
+}
+
+.trace-step-mark {
+  flex: none;
+  color: var(--ok);
+}
+
+.trace-step-mark.err {
+  color: var(--err);
+}
+
+.trace-step-name {
+  flex: none;
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+.trace-step-arg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.trace-step-dur {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.trace-step-io {
+  border-top: 1px dashed var(--border);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trace-io-row i {
+  display: block;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.trace-io-row pre {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.trace-usage {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.panel-tab-item {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0; /* 等分自适应：少时撑满（上限 150），多时一起收缩（下限 46），再放不下才折叠 */
+  min-width: 46px;
+  max-width: 150px;
+  border-radius: 8px;
+  background: transparent;
+  transition: background 0.1s;
+}
+
+.panel-tab-item:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+/* 激活 = 白色卡片 + 发丝描边（与侧栏选中行完全同款），灰条上自然浮起 */
+.panel-tab-item.active {
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.panel-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1; /* 文本区撑满剩余宽度，把 × 顶到芯片右缘 */
+  min-width: 0;
+  padding: 5px 2px 5px 9px;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.panel-tab svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+.panel-tab span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-tab-item.active .panel-tab {
+  font-weight: 500;
+}
+
+.panel-tab-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.panel-tab-item:hover .panel-tab-close,
+.panel-tab-item.active .panel-tab-close {
+  opacity: 1;
+}
+
+.panel-tab-close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.panel-tab-add {
+  flex: none;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.panel-tab-add:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
+
+/* 标签栏右上角的窗口按钮：收起完整视图 / 收起面板 */
+.pane-win-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.pane-win-btn:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
+
+.panel-tabs .pane-spacer {
+  flex: 1;
+}
+
+/* ------------------------------ 内嵌视图（浏览器 / 文件树 / 终端） ------------------------------ */
+
+/** 常驻挂载的 pane 容器：显示时撑满面板剩余高度 */
+.pane-slot {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.pane-slot.pane-hidden {
+  display: none;
+}
+
+.panel-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.pane-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-btn {
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.pane-btn:hover {
+  background: var(--panel);
+}
+
+.pane-url {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.pane-url:focus {
+  outline: none;
+  border-color: var(--text-3, var(--muted));
+}
+
+.pane-loading,
+.pane-hint {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.pane-select {
+  flex: none;
+  max-width: 130px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.pane-spacer {
+  flex: 1;
+}
+
+/* 内嵌浏览器：<webview> 撑满剩余区域 */
+.pane-web {
+  flex: 1;
+  min-height: 0;
+}
+
+.pane-web webview {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+/* 内嵌文件树 */
+.pane-tree {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding-bottom: 6px;
+}
+
+.tree-root {
+  padding: 9px 18px 5px;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.tree-row:hover {
+  background: var(--panel);
+}
+
+.tree-row .chev {
+  flex: none;
+  width: 11px;
+  font-size: 10.5px;
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+
+.tree-row .chev.open {
+  transform: rotate(90deg);
+}
+
+.tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-size {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tree-selected {
+  background: var(--panel);
+}
+
+/* 选中文件的差异区 */
+.pane-file {
+  flex: none;
+  max-height: 55%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.pane-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-file-head .panel-file-name {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.pane-file .panel-diff {
+  overflow: auto;
+  min-height: 0;
+}
+
+/* 内嵌终端 */
+.term-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 8px 8px;
+  cursor: text;
+}
+
+.term-out {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #1b1c1f;
+  font-family: Consolas, 'Cascadia Mono', 'Courier New', monospace;
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #e4e4e8;
+}
+
+/* 行内光标：输出末尾直接输入，块状闪烁光标模拟真实终端 */
+.term-live {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.term-caret {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--text);
+  animation: term-blink 1.1s steps(1) infinite;
+}
+
+@keyframes term-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 隐藏输入框：接键盘 / IME / 粘贴，不占视觉空间 */
+.term-hidden-input {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 2px;
+  height: 2px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  pointer-events: none;
+}
+
+/* 浏览器空白首页 */
+.pane-blank {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--panel-soft);
+}
+
+.pane-blank-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 6px;
+  border-radius: 11px;
+  background: var(--brand-grad);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  box-shadow: var(--brand-shadow);
+}
+
+.pane-blank-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text);
+}
+
+.pane-blank-hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.pane-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  font-size: 13px;
+  color: var(--muted);
+}

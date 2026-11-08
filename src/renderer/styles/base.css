@@ -1,0 +1,177 @@
+/* 变量、重置与整体布局 */
+
+/* ------------------------------------------------------------------
+   Pi Desktop — 界面样式
+   设计原则：密集但克制，代码优先，一个强调色，无多余装饰。
+------------------------------------------------------------------ */
+
+:root {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --panel: #f7f7f8;
+  --panel-soft: #fbfbfc;
+  --border: #e6e6e9;
+  --border-strong: #d6d6db;
+  --text: #18181b;
+  --text-2: #45454d;
+  --muted: #7c7c86;
+  --accent: #4f46e5;
+  --accent-soft: #f2f3ff;
+  --accent-border: #e0e2ff;
+  --ok: #15803d;
+  --ok-soft: #eaf7ee;
+  --err: #b91c1c;
+  --err-soft: #fdecec;
+  --warn: #b45309;
+
+  --brand-grad: linear-gradient(145deg, #2b2b31 0%, #17171b 58%, #0a0a0c 100%);
+  --brand-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans SC', sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #17181a;
+    --panel: #1d1e21;
+    --panel-soft: #1b1c1f;
+    --border: #2c2d31;
+    --border-strong: #3a3b40;
+    --text: #ececf0;
+    --text-2: #b9b9c2;
+    --muted: #8b8b95;
+    --accent: #8b8cf8;
+    --accent-soft: #23243a;
+    --accent-border: #33345a;
+    --ok: #4ade80;
+    --ok-soft: #16301f;
+    --err: #fca5a5;
+    --err-soft: #3a1d1d;
+    --warn: #fbbf24;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 28%, transparent);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ------------------------------ 布局 ------------------------------ */
+
+.app {
+  position: relative; /* 两条可拖拽分割线的定位基准 */
+  display: grid;
+  grid-template-columns: var(--sidebar-w, 264px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 26px;
+  height: 100vh;
+}
+
+.main {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/* 可拖拽分割线：挂在 app 根上（绝对定位，不参与 grid），覆盖主行高度 */
+.pane-split {
+  position: absolute;
+  top: 0;
+  bottom: 26px;
+  width: 9px;
+  transform: translateX(-50%);
+  z-index: 40;
+  cursor: col-resize;
+}
+
+/* 会话侧栏右缘（left 跟随 --sidebar-w，面板开/关、完整视图下都在正确位置） */
+.pane-split-sidebar {
+  left: var(--sidebar-w, 264px);
+}
+
+.pane-split::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.pane-split:hover::after {
+  background: var(--text-2);
+  opacity: 0.45;
+}
+
+body.pane-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.pane-resizing .pane-split::after {
+  background: var(--text-2);
+  opacity: 0.6;
+}
+
+/* 拖拽屏障：拖分割线时盖住整个窗口，事件只走 HTML 层，
+   防止光标经过 <webview>（内嵌浏览器）时被原生层吞掉 mousemove/mouseup */
+.pane-drag-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  cursor: col-resize;
+  background: transparent;
+}

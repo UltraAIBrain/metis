@@ -1,0 +1,15 @@
+node_modules/
+out/
+dist/
+.tmp/
+
+# 打包产物：release/ release2/ release-icon/ release-next/ …（electron-builder 输出 + 残留）
+release*/
+*.tsbuildinfo
+*.log
+.DS_Store
+Thumbs.db
+
+# 本地工具产物（分析/打包残留），不进仓库
+.mimosa/
+.workbuddy/

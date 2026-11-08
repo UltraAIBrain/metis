@@ -1,0 +1,43 @@
+{
+  "name": "pi-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pi Agent Desktop — 极简编码代理的桌面客户端",
+  "main": "./out/main/index.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:electron": "electron scripts/electron-smoke-main.cjs",
+    "verify": "npm run typecheck && npm run build && npm run smoke && npm run smoke:electron",
+    "pack": "npm run build && electron-builder --dir",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:mac": "npm run build && electron-builder --mac dmg",
+    "dist:linux": "npm run build && electron-builder --linux AppImage",
+    "icon": "electron scripts/make-icon.cjs",
+    "pi": "node out/main/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/react": "^18.3.17",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  },
+  "bin": {
+    "pi": "./out/main/cli.js"
+  }
+}
