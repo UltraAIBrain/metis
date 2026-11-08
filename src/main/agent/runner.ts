@@ -31,14 +31,6 @@ import { validAttachmentsFor } from '../attachments'
 /** 子过程落盘时工具输出的回放截断（回放够用，防单行 JSON 数 MB） */
 const SUB_TOOL_CLIP = 8_000
 
-/** 单个子智能体的步数上限：与全局上限取小，防一个子任务吃满整轮预算 */
-const SUBAGENT_MAX_STEPS = 24
-
-/** 步数上限的合法区间与 ConfigStore 的校验保持一致 */
-function clampSteps(n: number): number {
-  return Math.round(Math.min(200, Math.max(1, Number.isFinite(n) ? n : 1)))
-}
-
 /** 上下文压缩的总结提示词：产出结构化摘要，供新分支继续工作 */
 const COMPACT_SYSTEM = [
   '你是会话压缩器。把这段开发者对话压缩成一份**给下一个接手的 agent 看的工作摘要**，用中文，不超过 1200 字，按以下结构输出：',
@@ -205,8 +197,6 @@ export class AgentRunner {
     const model = meta.model?.trim() || cfg.model
     // 思考强度同理：会话绑定优先，其次全局默认
     const thinking = meta.thinking ?? cfg.thinking
-    // 单轮步数上限同理：会话绑定优先，其次全局默认
-    const maxSteps = clampSteps(meta.maxSteps ?? cfg.maxSteps)
     // 输出上限：手填优先；否则用模型自己的能力值（接口返回 > 内置表 > 兜底 16384）
     const cachedMax = profile.models?.find((m) => m.id === model)?.maxOutput
     const autoMax = cachedMax ?? lookupModel(model)?.maxOutput ?? 16384
@@ -238,7 +228,6 @@ export class AgentRunner {
       thinking,
       cwd,
       shell: cfg.shell,
-      maxSteps,
       maxTokens
     })
 
@@ -282,15 +271,6 @@ export class AgentRunner {
 
         if (run.abort.signal.aborted) {
           status = 'aborted'
-          break
-        }
-        if (steps >= maxSteps) {
-          this.emit({
-            type: 'notice',
-            sessionId,
-            level: 'warn',
-            text: `已达单轮最大步数（${maxSteps}），本轮自动停下。直接发一句「继续」就能接着做，不用重新描述任务；嫌频繁可以在这个项目的顶栏「步数」里放宽。`
-          })
           break
         }
         steps++
@@ -485,9 +465,6 @@ export class AgentRunner {
 
             for (;;) {
               if (run.abort.signal.aborted) return stat(false, '子任务已随主任务中止。')
-              if (steps >= Math.min(maxSteps, SUBAGENT_MAX_STEPS)) {
-                return stat(false, `子任务达到步数上限（${Math.min(maxSteps, SUBAGENT_MAX_STEPS)}），以上没有可靠结论。可以在汇报里重试或拆小任务。`)
-              }
               steps++
 
               let result: StreamResult

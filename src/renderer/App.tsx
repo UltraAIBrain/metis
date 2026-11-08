@@ -18,7 +18,6 @@ import { Toasts } from './components/Toasts'
 import { SessionModelPicker } from './components/SessionModelPicker'
 import { SessionDir } from './components/SessionDir'
 import { SessionThinking } from './components/SessionThinking'
-import { SessionSteps } from './components/SessionSteps'
 import { StartScreen } from './components/StartScreen'
 import { SidePanel } from './components/SidePanel'
 import { AskDialog } from './components/AskDialog'
@@ -164,7 +163,6 @@ export function App(): JSX.Element {
             {session && <SessionDir />}
             {session && <SessionModelPicker />}
             {session && <SessionThinking />}
-            {session && <SessionSteps />}
             {running && (
               <span className="pill running">
                 <span className="pill-dot" />

@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
-import { lookupModel } from '@shared/model-catalog'
-import { sessionModelOf, sessionProfileOf, store, useSlice } from '../store'
+import { formatTokens } from '@shared/model-catalog'
+import { contextWindowOf, sessionModelOf, sessionProfileOf, store, useSlice } from '../store'
 
 function totalTokens(messages: { role: string; usage?: { input: number; output: number } }[]): {
   input: number
@@ -23,15 +23,27 @@ function short(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`
 }
 
-/** 当前上下文占模型窗口的比例：以最近一次响应的 input tokens 为准（即下一次请求的基数） */
-function contextPercent(session: { messages: { role: string; usage?: { input: number } }[] } | null, model: string): number | null {
-  if (!session) return null
-  const window = lookupModel(model)?.contextWindow
-  if (!window) return null
+interface ContextUsage {
+  /** 最近一次请求的输入 token（= 下一次请求的基数） */
+  input: number
+  /** 模型窗口；未超过上限时不封顶，便于看清真实占用 */
+  used: number
+  window: number
+}
+
+/**
+ * 上下文占用：以最近一次响应的 input tokens 为准（即下一次请求的基数）。
+ * 分母必须走 contextWindowOf（接口值优先），否则内置表里没有的模型会被算成超限。
+ */
+function contextUsage(
+  session: { messages: { role: string; usage?: { input: number } }[] } | null,
+  window: number | undefined
+): ContextUsage | null {
+  if (!session || !window) return null
   for (let i = session.messages.length - 1; i >= 0; i--) {
     const m = session.messages[i]
     if (m.role === 'assistant' && m.usage?.input) {
-      return Math.min(100, Math.round((m.usage.input / window) * 100))
+      return { input: m.usage.input, used: Math.round((m.usage.input / window) * 100), window }
     }
   }
   return null
@@ -42,6 +54,7 @@ export const StatusBar = memo(function StatusBar(): JSX.Element {
   const runningIds = useSlice((s) => s.runningIds)
   const queue = useSlice((s) => s.queue)
   const config = useSlice((s) => s.config)
+  const modelCache = useSlice((s) => s.modelCache)
   const [compacting, setCompacting] = useState(false)
 
   const id = session?.id
@@ -52,7 +65,8 @@ export const StatusBar = memo(function StatusBar(): JSX.Element {
   const profile = sessionProfileOf({ session, config })
   const provider = profile?.label ?? '未配置提供商'
   const model = sessionModelOf({ session, config }) || '—'
-  const used = contextPercent(session ?? null, model)
+  const window = contextWindowOf({ config, session, modelCache })
+  const usage = contextUsage(session ?? null, window)
 
   const label = running ? (queued ? `运行中 · 排队 ${queued}` : '运行中') : '就绪'
 
@@ -77,15 +91,17 @@ export const StatusBar = memo(function StatusBar(): JSX.Element {
         {session?.cwd || (session ? '项目目录将在首次运行时自动创建' : '没有打开的项目')}
       </span>
       <span className="status-spacer" />
-      {used !== null && session && session.id !== 'draft' && (
+      {usage && session && session.id !== 'draft' && (
         <>
           <span
-            className={`status-ctx ${used >= 90 ? 'hot' : used >= 75 ? 'warn' : ''}`}
-            title="最近一次请求的输入占模型上下文窗口的比例；接近上限时压缩上下文"
+            className={`status-ctx ${usage.used >= 90 ? 'hot' : usage.used >= 75 ? 'warn' : ''}`}
+            title={`最近一次请求输入 ${usage.input.toLocaleString()} tokens，模型窗口 ${formatTokens(
+              usage.window
+            )}（${usage.window.toLocaleString()}）。接近上限时压缩上下文。`}
           >
-            上下文 {used}%
+            上下文 {usage.used}%
           </span>
-          {(used >= 60 || compacting) && (
+          {(usage.used >= 60 || compacting) && (
             <button
               className="statusbar-btn"
               type="button"

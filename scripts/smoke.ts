@@ -166,6 +166,8 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
         let memoryMark = false
         let memRewriteMark = false
         let exploreMark = false
+        /** 历史里是否已经调过 memory 工具（rewrite 只做一次，否则就是无限循环） */
+        let memoryCalled = false
         try {
           const parsed = JSON.parse(body || '{}')
           assistantTurns = (parsed.messages ?? []).filter((m: { role: string }) => m.role === 'assistant').length
@@ -192,6 +194,10 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
           memoryMark = lastUserText.includes('MEMORY-TOOL-SMOKE')
           memRewriteMark = lastUserText.includes('MEMORY-REWRITE-SMOKE')
           exploreMark = lastUserText.includes('EXPLORE-SUBTASK-SMOKE')
+          memoryCalled = (parsed.messages ?? []).some(
+            (m: { tool_calls?: { function?: { name?: string } }[] }) =>
+              Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => tc.function?.name === 'memory')
+          )
           // 记录 system 注入与工具清单（验证记忆注入 / 子类型工具过滤）
           const sys = (parsed.messages ?? []).find((m: { role: string }) => m.role === 'system')
           if (sys) seenSystemLast = JSON.stringify(sys.content)
@@ -268,28 +274,35 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
           return
         }
 
-        // 步数上限测试用：每一轮都再调一次 bash，直到 runner 主动停下
-        if (model0 === 'mock-loop') {
-          send({ choices: [{ index: 0, delta: { role: 'assistant', content: '继续。' } }] })
-          send({
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  tool_calls: [
-                    {
-                      index: 0,
-                      id: `call_loop_${assistantTurns}`,
-                      type: 'function',
-                      function: { name: 'bash', arguments: JSON.stringify({ command: 'echo loop' }) }
-                    }
-                  ]
+        // 回归：前 45 轮都由模型自己决定继续（旧版本 40 步就被截断），第 46 轮才收尾。
+        // 循环的终止条件只能是「模型不再调用工具」，不能是步数。
+        if (model0 === 'mock-longrun') {
+          if (assistantTurns < 45) {
+            send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: `call_long_${assistantTurns}`,
+                        type: 'function',
+                        function: { name: 'read', arguments: JSON.stringify({ path: 'demo/hello.txt' }) }
+                      }
+                    ]
+                  }
                 }
-              }
-            ]
-          })
-          send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
-          send({ choices: [], usage: { prompt_tokens: 50, completion_tokens: 8 } })
+              ]
+            })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+            send({ choices: [], usage: { prompt_tokens: 40, completion_tokens: 6 } })
+          } else {
+            send({ choices: [{ index: 0, delta: { content: '第 45 轮做完，没有步数上限。' } }] })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+            send({ choices: [], usage: { prompt_tokens: 60, completion_tokens: 10 } })
+          }
           res.write('data: [DONE]\n\n')
           res.end()
           return
@@ -377,27 +390,35 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
         // 子智能体派生测试：父会话第一轮回 task 调用，第二轮回最终文本
         // 记忆测试：MEMORY-TOOL-SMOKE 触发 append；MEMORY-REWRITE-SMOKE 触发 rewrite（验证覆盖）
         if (memRewriteMark && !hasSubtaskMark) {
-          const memCall = { action: 'rewrite', content: '- 精简版记忆' }
-          send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
-          send({
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  tool_calls: [
-                    {
-                      index: 0,
-                      id: `call_mem_rw_${assistantTurns + 1}`,
-                      type: 'function',
-                      function: { name: 'memory', arguments: JSON.stringify(memCall) }
-                    }
-                  ]
+          // 只重写一次：拿到 rewrite 结果后就收尾。写成无条件返回工具调用会让
+          // 模型永远"还有下一步"——那正是以前被 maxSteps 硬停掩盖掉的无限循环。
+          if (!memoryCalled) {
+            const memCall = { action: 'rewrite', content: '- 精简版记忆' }
+            send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: 'call_mem_rw_1',
+                        type: 'function',
+                        function: { name: 'memory', arguments: JSON.stringify(memCall) }
+                      }
+                    ]
+                  }
                 }
-              }
-            ]
-          })
-          send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
-          send({ choices: [], usage: { prompt_tokens: 60, completion_tokens: 8 } })
+              ]
+            })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+            send({ choices: [], usage: { prompt_tokens: 60, completion_tokens: 8 } })
+          } else {
+            send({ choices: [{ index: 0, delta: { content: '记忆已重写。' } }] })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+            send({ choices: [], usage: { prompt_tokens: 80, completion_tokens: 6 } })
+          }
           res.write('data: [DONE]\n\n')
           res.end()
           return
@@ -602,7 +623,6 @@ async function main(): Promise<void> {
 
   config.patch({
     model: 'mock-model',
-    maxSteps: 8,
     shell: 'auto',
     activeProfileId: 'deepseek',
     profiles: [{ id: 'deepseek', protocol: 'openai', baseUrl: mock.url, apiKey: 'smoke-test-key' }]
@@ -1118,17 +1138,13 @@ async function main(): Promise<void> {
   await runOnce(thinkSession.id, '跑一下')
   check('会话级思考强度进入请求', seenEffort[0] === 'max', seenEffort.join(','))
 
-  console.log('\n[13b] 会话级步数上限')
-  const stepsSession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-loop' })
-  check('步数默认跟随全局', sessions.view(stepsSession.id).maxSteps === undefined)
-  sessions.setMaxSteps(stepsSession.id, 5)
-  check('可写入会话 meta', sessions.view(stepsSession.id).maxSteps === 5)
-
-  const stepsEvents: AgentEvent[] = []
-  const stepsRunner = new AgentRunner(sessions, config, logger, (e) => stepsEvents.push(e))
+  console.log('\n[13b] 不设步数上限')
+  const longSession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-longrun' })
+  const longEvents: AgentEvent[] = []
+  const longRunner = new AgentRunner(sessions, config, logger, (e) => longEvents.push(e))
   await new Promise<void>((resolve) => {
     const timer = setInterval(() => {
-      if (stepsEvents.some((e) => e.type === 'run_end')) {
+      if (longEvents.some((e) => e.type === 'run_end')) {
         clearInterval(timer)
         resolve()
       }
@@ -1136,22 +1152,28 @@ async function main(): Promise<void> {
     setTimeout(() => {
       clearInterval(timer)
       resolve()
-    }, 20_000)
-    stepsRunner.send(stepsSession.id, '一直继续')
+    }, 120_000)
+    longRunner.send(longSession.id, '一直做到你自己停')
   })
 
-  const looped = sessions.view(stepsSession.id).messages.filter((m) => m.role === 'assistant').length
-  check('会话级上限生效（5 步就停）', looped === 5, `assistant=${looped}`)
-  const capNotice = stepsEvents.find(
-    (e) => e.type === 'notice' && e.level === 'warn' && e.text.includes('已达单轮最大步数（5）')
+  const longSteps = sessions.view(longSession.id).messages.filter((m) => m.role === 'assistant').length
+  check('45 轮工具往返不被截断（旧版 40 步就停）', longSteps === 46, `assistant=${longSteps}`)
+  const capNoise = longEvents.filter(
+    (e) => e.type === 'notice' && (e.text.includes('步数') || e.text.includes('步上限'))
   )
-  check('达上限有可读提示', Boolean(capNotice), JSON.stringify(stepsEvents.filter((e) => e.type === 'notice')))
-  const capEnd = stepsEvents.find((e) => e.type === 'run_end')
-  check('达上限不是错误结束', capEnd?.type === 'run_end' && capEnd.status === 'done', JSON.stringify(capEnd))
+  check('不再出现步数相关的停止提示', capNoise.length === 0, JSON.stringify(capNoise))
+  const longEnd = longEvents.find((e) => e.type === 'run_end')
+  check('跑到模型自己收尾才结束', longEnd?.type === 'run_end' && longEnd.status === 'done', JSON.stringify(longEnd))
+  console.log('\n[13c] 上下文窗口解析（状态栏百分比）')
+  const { resolveContextWindow } = await import('../src/shared/model-catalog')
+  // 复现过的真实事故：接口说 deepseek-flash 是 1M，内置表只有泛化的 128K，
+  // 状态栏只查内置表 → 205701 / 128000 = 161% → 封顶成 100%，实际只用两成
+  check('接口给的窗口优先于内置表', resolveContextWindow('deepseek-flash', { contextWindow: 1048576 }) === 1048576)
+  check('没有接口值才回落内置表', resolveContextWindow('deepseek-flash') === 128000)
+  check('内置表没有的模型返回 undefined', resolveContextWindow('no-such-model-xyz', {}) === undefined)
+  const pct = Math.round((205701 / (resolveContextWindow('deepseek-flash', { contextWindow: 1048576 }) as number)) * 100)
+  check('真实占用算成 20% 而不是 100%', pct === 20, `${pct}%`)
 
-  // 恢复跟随全局（配置里是 8）：同一个模型应该跑到 8 步
-  sessions.setMaxSteps(stepsSession.id, undefined)
-  check('可恢复跟随全局', sessions.view(stepsSession.id).maxSteps === undefined)
   console.log('\n[21] 附件')
   const { stageAttachment, validAttachmentsFor, removeSessionAttachments, sessionAttachmentsDir, MAX_ATTACHMENTS } =
     await import('../src/main/attachments')
@@ -1494,7 +1516,6 @@ async function main(): Promise<void> {
         activeProfileId: 'deepseek',
         model: 'mock-model',
         temperature: 0.2,
-        maxSteps: 40,
         maxTokens: 0,
         shell: 'auto',
         thinking: 'high',

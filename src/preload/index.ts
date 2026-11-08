@@ -38,9 +38,7 @@ const api = {
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickDir),
   setSessionThinking: (id: string, thinking: ThinkingEffort | null): Promise<SessionView> =>
     ipcRenderer.invoke(IPC.sessionThinking, id, thinking),
-  /** 会话级单轮步数上限；null = 跟随全局默认 */
-  setSessionSteps: (id: string, maxSteps: number | null): Promise<SessionView> =>
-    ipcRenderer.invoke(IPC.sessionSteps, id, maxSteps),
+
   setSessionPinned: (id: string, pinned: boolean): Promise<SessionSummary[]> =>
     ipcRenderer.invoke(IPC.sessionPin, id, pinned),
   revealSession: (id: string): Promise<void> => ipcRenderer.invoke(IPC.sessionReveal, id),

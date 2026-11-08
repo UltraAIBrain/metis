@@ -23,10 +23,7 @@ function validateRuntime(values: RuntimeValues): string | null {
   if (!values.temperature.trim() || !Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
     return 'Temperature 需为 0–2 之间的数值'
   }
-  const maxSteps = Number(values.maxSteps)
-  if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 200) {
-    return '单轮最大步数需为 1–200 之间的整数'
-  }
+
   const maxTokens = Number(values.maxTokens)
   if (!values.maxTokens.trim() || !Number.isInteger(maxTokens) || maxTokens < 0 || maxTokens > 200000) {
     return '输出上限需为 0–200000 之间的整数'
@@ -43,7 +40,7 @@ export function SettingsDialog({ config, onClose }: { config: PublicConfig; onCl
   const [saving, setSaving] = useState(false)
   const [runtime, setRuntime] = useState<RuntimeValues>({
     temperature: String(config.temperature),
-    maxSteps: String(config.maxSteps),
+
     maxTokens: String(config.maxTokens),
     shell: config.shell,
     thinking: config.thinking
@@ -126,7 +123,7 @@ export function SettingsDialog({ config, onClose }: { config: PublicConfig; onCl
       profiles: api.buildPatch(),
       model: api.model.trim(),
       temperature: Number(runtime.temperature),
-      maxSteps: Number(runtime.maxSteps),
+
       maxTokens: Number(runtime.maxTokens) || 0,
       shell: runtime.shell as ShellKind,
       thinking: runtime.thinking

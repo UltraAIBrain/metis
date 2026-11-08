@@ -2,7 +2,6 @@ import type { ShellKind, ThinkingEffort } from '@shared/types'
 
 export interface RuntimeValues {
   temperature: string
-  maxSteps: string
   maxTokens: string
   shell: ShellKind
   thinking: ThinkingEffort
@@ -68,17 +67,6 @@ export function RuntimeTab({
             onChange={(e) => onChange({ maxTokens: e.target.value })}
           />
           <p className="field-hint">0 = 自动跟随模型上限；思考也计入这里。</p>
-        </div>
-        <div className="field">
-          <label>单轮最大步数</label>
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={values.maxSteps}
-            onChange={(e) => onChange({ maxSteps: e.target.value })}
-          />
-          <p className="field-hint">一次任务里最多几步工具往返。</p>
         </div>
       </div>
 

@@ -20,7 +20,7 @@ import type {
   ToolMessage,
   Trajectory
 } from '@shared/types'
-import { lookupModel } from '@shared/model-catalog'
+import { lookupModel, resolveContextWindow } from '@shared/model-catalog'
 import { useCallback, useRef, useSyncExternalStore } from 'react'
 
 export interface SendOutcome {
@@ -101,7 +101,6 @@ const EMPTY_CONFIG: PublicConfig = {
   profiles: [],
   model: '',
   temperature: 0.2,
-  maxSteps: 40,
   maxTokens: 0,
   shell: 'auto',
   thinking: 'high'
@@ -394,23 +393,6 @@ class Store {
     }
   }
 
-  /** 切换当前会话的单轮步数上限；undefined = 恢复跟随全局默认 */
-  async setSessionSteps(maxSteps: number | undefined): Promise<void> {
-    const session = this.state.session
-    if (!session) return
-    if (session.id === DRAFT_ID) {
-      this.set({ session: { ...session, maxSteps } })
-      return
-    }
-    const navigation = this.navigationSeq
-    try {
-      const view = await window.pi.setSessionSteps(session.id, maxSteps ?? null)
-      if (navigation !== this.navigationSeq || this.currentId !== session.id) return
-      this.set({ session: view })
-    } catch (err) {
-      this.notify('error', `切换步数上限失败：${(err as Error).message}`)
-    }
-  }
 
   /** 拉取某家提供商的模型列表，结果同时写进内存缓存 */
   async loadModels(profile: PublicProfile): Promise<ModelListResult> {
@@ -1023,6 +1005,18 @@ export function sessionModelOf(state: Pick<State, 'session' | 'config'>): string
 export function modelsOf(state: Pick<State, 'modelCache'>, profile?: PublicProfile): ModelOption[] {
   if (!profile) return []
   return state.modelCache[profile.id] ?? profile.models
+}
+
+/**
+ * 当前会话模型的上下文窗口（tokens）：接口返回的优先，其次内置兜底表。
+ * 与 runner 取 maxOutput、modelSupportsImagesOf 取 inputs 的顺序保持一致——
+ * 只查内置表会让「接口说 1M、表里写 128K」的模型被算成严重超限（假 100%）。
+ */
+export function contextWindowOf(state: Pick<State, 'config' | 'session' | 'modelCache'>): number | undefined {
+  const model = sessionModelOf(state)
+  if (!model) return undefined
+  const cached = modelsOf(state, sessionProfileOf(state)).find((m) => m.id === model)
+  return resolveContextWindow(model, cached)
 }
 
 export function isRunning(state: Pick<State, 'runningIds' | 'session'>): boolean {

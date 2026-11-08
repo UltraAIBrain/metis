@@ -155,8 +155,6 @@ export interface SessionView {
   model?: string
   /** 该会话的思考强度；为空表示沿用全局默认 */
   thinking?: ThinkingEffort
-  /** 该会话的单轮步数上限；为空表示沿用全局默认 */
-  maxSteps?: number
   messages: Message[]
   branch: Record<string, BranchInfo>
 }
@@ -207,7 +205,6 @@ export interface PublicConfig {
   profiles: PublicProfile[]
   model: string
   temperature: number
-  maxSteps: number
   /** 输出上限（tokens）；0 表示用服务商默认 */
   maxTokens: number
   shell: ShellKind
@@ -231,7 +228,6 @@ export interface ConfigPatch {
   profiles?: ProfilePatch[]
   model?: string
   temperature?: number
-  maxSteps?: number
   maxTokens?: number
   shell?: ShellKind
   thinking?: ThinkingEffort

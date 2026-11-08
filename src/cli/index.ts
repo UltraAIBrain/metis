@@ -162,7 +162,6 @@ const HELP = [
   '/model             查看当前模型与全部候选',
   '/model use <档案id> <模型名>  绑定本会话模型',
   '/thinking <low|high|max|reset>  设置思考强度',
-  '/steps <n|reset>   设置本会话单轮步数上限（1-200，reset = 跟随全局默认）',
   '/compact           压缩上下文：当前分支总结成摘要，切到摘要新分支（原分支保留）',
   '/login [档案id]    OpenAI OAuth 登录（ChatGPT 订阅，默认 openai-codex）',
   '/logout [档案id]   清除 OAuth 登录',
@@ -191,14 +190,13 @@ async function runLogin(): Promise<{ accessToken: string; refreshToken: string; 
   return login.promise
 }
 
-function currentView(): { model: string; thinking: string; maxSteps: number; title: string } {
+function currentView(): { model: string; thinking: string; title: string } {
   const cfg = config.load()
   const meta = sessions.meta(sessionId)
   const profile = (meta.profileId ? config.profileById(meta.profileId) : undefined) ?? config.activeProfile()
   const model = meta.model?.trim() || cfg.model || '（未选择）'
   const thinking = meta.thinking ?? cfg.thinking
-  const maxSteps = meta.maxSteps ?? cfg.maxSteps
-  return { model: `${profile.label} · ${model}`, thinking, maxSteps, title: sessions.view(sessionId).title }
+  return { model: `${profile.label} · ${model}`, thinking, title: sessions.view(sessionId).title }
 }
 
 /** 命令队列：保证多条命令按到达顺序逐个执行，不互相拦截 */
@@ -326,22 +324,6 @@ async function handleCommand(line: string): Promise<boolean> {
       }
       sessions.setThinking(sessionId, level === 'reset' ? undefined : (level as 'low' | 'high' | 'max'))
       write(`${c.green('思考强度')}：${currentView().thinking}\n`)
-      return true
-    }
-    case 'steps': {
-      const raw = rest[0]
-      if (raw === 'reset') {
-        sessions.setMaxSteps(sessionId, undefined)
-        write(`${c.green('步数上限')}：跟随全局默认（${currentView().maxSteps}）\n`)
-        return true
-      }
-      const n = Number(raw)
-      if (!Number.isFinite(n) || n < 1 || n > 200) {
-        write('用法：/steps <1-200>|reset\n')
-        return true
-      }
-      sessions.setMaxSteps(sessionId, n)
-      write(`${c.green('步数上限')}：${currentView().maxSteps}（本会话）\n`)
       return true
     }
     case 'attach': {

@@ -53,7 +53,6 @@ export interface StoredConfig {
   profiles: StoredProfile[]
   model: string
   temperature: number
-  maxSteps: number
   maxTokens: number
   shell: ShellKind
   /** 思考强度，见 ThinkingEffort */
@@ -69,7 +68,6 @@ interface LegacyConfig {
   provider?: Protocol
   model?: string
   temperature?: number
-  maxSteps?: number
   shell?: ShellKind
   providers?: Record<Protocol, { baseUrl?: string; apiKey?: string; keyProtected?: boolean }>
   lastSessionId?: string
@@ -130,7 +128,6 @@ export class ConfigStore {
       // 模型不预置：由用户在启动后从 /models 候选里选
       model: '',
       temperature: 0.2,
-      maxSteps: 40,
       // 0 = 自动跟随模型自身的输出上限（见 shared/model-catalog）
       maxTokens: 0,
       shell: 'auto',
@@ -217,7 +214,6 @@ export class ConfigStore {
       profiles,
       model: typeof raw.model === 'string' && raw.model ? raw.model : (active.models?.[0]?.id ?? d.model),
       temperature: clamp(Number(raw.temperature ?? d.temperature), 0, 2),
-      maxSteps: Math.round(clamp(Number(raw.maxSteps ?? d.maxSteps), 1, 200)),
       maxTokens: Math.round(clamp(Number(raw.maxTokens ?? d.maxTokens), 0, 200000)),
       shell,
       thinking: (['low', 'high', 'max'] as ThinkingEffort[]).includes(raw.thinking as ThinkingEffort)
@@ -260,11 +256,6 @@ export class ConfigStore {
       const value = Number(p.temperature)
       if (!Number.isFinite(value)) throw new Error('Temperature 必须是有限数值')
       cfg.temperature = clamp(value, 0, 2)
-    }
-    if (p.maxSteps !== undefined) {
-      const value = Number(p.maxSteps)
-      if (!Number.isFinite(value)) throw new Error('单轮最大步数必须是有限数值')
-      cfg.maxSteps = Math.round(clamp(value, 1, 200))
     }
     if (p.shell && (['auto', 'powershell', 'cmd', 'bash'] as ShellKind[]).includes(p.shell)) cfg.shell = p.shell
     if (p.thinking && (['low', 'high', 'max'] as ThinkingEffort[]).includes(p.thinking)) cfg.thinking = p.thinking
@@ -445,7 +436,6 @@ export class ConfigStore {
       }),
       model: cfg.model,
       temperature: cfg.temperature,
-      maxSteps: cfg.maxSteps,
       maxTokens: cfg.maxTokens,
       shell: cfg.shell,
       thinking: cfg.thinking,

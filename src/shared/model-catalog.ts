@@ -1,4 +1,4 @@
-import type { ModelInput } from './types'
+import type { ModelInput, ModelOption } from './types'
 
 /**
  * 模型参数的内置兜底表。
@@ -56,6 +56,19 @@ export function lookupModel(id: string): ModelProfile | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * 上下文窗口的解析顺序：接口返回的优先，其次内置兜底表。
+ *
+ * 只查内置表会让「接口说 1M、表里写 128K」的模型被算成严重超限——
+ * 状态栏曾因此常年显示 100%（实际只用了两成）。
+ */
+export function resolveContextWindow(
+  id: string,
+  cached?: Pick<ModelOption, 'contextWindow'>
+): number | undefined {
+  return cached?.contextWindow ?? lookupModel(id)?.contextWindow
 }
 
 /** 1000000 → 1M；131072 → 128K；8192 → 8K */

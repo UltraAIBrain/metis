@@ -34,8 +34,6 @@ export interface SessionMeta {
   model?: string
   /** 会话级思考强度：为空时沿用全局默认 */
   thinking?: ThinkingEffort
-  /** 会话级单轮步数上限：为空时沿用全局默认 */
-  maxSteps?: number
   /** 置顶：排序时优先，不受最近更新时间影响 */
   pinned?: boolean
 }
@@ -177,15 +175,6 @@ export class SessionStore {
     this.writeMeta(meta)
   }
 
-  /**
-   * 修改会话的单轮步数上限；传 undefined 表示恢复跟随全局默认。
-   * 长任务（大范围重构 / 多轮排错）可以只给这个项目放宽，不必动全局设置。
-   */
-  setMaxSteps(sessionId: string, maxSteps: number | undefined): void {
-    const meta = this.meta(sessionId)
-    meta.maxSteps = typeof maxSteps === 'number' && Number.isFinite(maxSteps) ? Math.round(maxSteps) : undefined
-    this.writeMeta(meta)
-  }
 
   exists(id: string): boolean {
     return existsSync(this.metaFile(id))
@@ -334,7 +323,6 @@ export class SessionStore {
       profileId: meta.profileId,
       model: meta.model,
       thinking: meta.thinking,
-      maxSteps: meta.maxSteps,
       messages: path.map((e) => e.message),
       branch
     }
