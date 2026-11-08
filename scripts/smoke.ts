@@ -312,35 +312,29 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
           return
         }
 
-        // 重复调用检测：连续 6 次完全相同的 read，之后自己收尾。
-        // 用来验证「连续相同 → 提示换思路」，以及循环不会因此被强行中断。
-        if (model0 === 'mock-repeat') {
-          if (assistantTurns < 6) {
-            send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
-            send({
-              choices: [
-                {
-                  index: 0,
-                  delta: {
-                    tool_calls: [
-                      {
-                        index: 0,
-                        id: `call_rep_${assistantTurns}`,
-                        type: 'function',
-                        function: { name: 'read', arguments: JSON.stringify({ path: 'demo/hello.txt' }) }
-                      }
-                    ]
-                  }
+        // 空转检测：每轮都发完全相同的 read(demo/hello.txt)，结果恒定不变。
+        // 第 3 次应只提醒，第 4 次判定空转并停止（对齐 OpenHands 的 action+observation 阈值 4）。
+        if (model0 === 'mock-stuck') {
+          send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
+          send({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: `call_stuck_${assistantTurns}`,
+                      type: 'function',
+                      function: { name: 'read', arguments: JSON.stringify({ path: 'demo/hello.txt' }) }
+                    }
+                  ]
                 }
-              ]
-            })
-            send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
-            send({ choices: [], usage: { prompt_tokens: 40, completion_tokens: 6 } })
-          } else {
-            send({ choices: [{ index: 0, delta: { content: '收到重复提醒，改变做法。' } }] })
-            send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
-            send({ choices: [], usage: { prompt_tokens: 60, completion_tokens: 8 } })
-          }
+              }
+            ]
+          })
+          send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+          send({ choices: [], usage: { prompt_tokens: 40, completion_tokens: 6 } })
           res.write('data: [DONE]\n\n')
           res.end()
           return
@@ -1202,43 +1196,95 @@ async function main(): Promise<void> {
   check('不再出现步数相关的停止提示', capNoise.length === 0, JSON.stringify(capNoise))
   const longEnd = longEvents.find((e) => e.type === 'run_end')
   check('跑到模型自己收尾才结束', longEnd?.type === 'run_end' && longEnd.status === 'done', JSON.stringify(longEnd))
-  console.log('\n[13d] 重复调用检测（纯函数）')
-  const { noteCall, callKey, canonicalInput, REPEAT_REMIND_EVERY } = await import('../src/main/agent/repeat-guard')
+  console.log('\n[13d] 空转检测（纯函数）')
+  const { assess, callKey, canonicalInput, resultDigest, stabilizeResult, DEFAULTS } = await import(
+    '../src/main/agent/stuck-guard'
+  )
+  const ok = (content: string): string => resultDigest(content, false)
+  const bad = (content: string): string => resultDigest(content, true)
+
+  // 参数指纹：键序无关，工具名参与
   check(
     '参数键序不同视为同一次调用',
     callKey('read', { path: 'a.txt', limit: 10 }) === callKey('read', { limit: 10, path: 'a.txt' }),
-    callKey('read', { path: 'a.txt', limit: 10 })
+    canonicalInput({ path: 'a.txt', limit: 10 })
   )
   check('参数不同则是不同调用', callKey('read', { path: 'a.txt' }) !== callKey('read', { path: 'b.txt' }))
   check('工具不同则是不同调用', callKey('read', { path: 'a.txt' }) !== callKey('write', { path: 'a.txt' }))
-  check('嵌套对象也按键序规范化', canonicalInput({ a: { y: 1, x: 2 } }) === canonicalInput({ a: { x: 2, y: 1 } }))
 
-  // 连续计数与提醒节奏：第 3、6 次提醒，中间不刷屏
-  const rep1 = noteCall(undefined, 'bash', { command: 'npm run build' })
-  check('首次调用计数为 1', rep1.count === 1 && !rep1.remind)
-  const rep2 = noteCall(rep1.state, 'bash', { command: 'npm run build' })
-  check('第二次仍不提醒', rep2.count === 2 && !rep2.remind)
-  const rep3 = noteCall(rep2.state, 'bash', { command: 'npm run build' })
-  check(`第 ${REPEAT_REMIND_EVERY} 次提醒`, rep3.count === 3 && rep3.remind, `count=${rep3.count}`)
-  const rep4 = noteCall(rep3.state, 'bash', { command: 'npm run build' })
-  check('第四次不重复刷屏', rep4.count === 4 && !rep4.remind)
-  const rep5 = noteCall(rep4.state, 'bash', { command: 'npm run build' })
-  check('第五次仍不刷屏', rep5.count === 5 && !rep5.remind)
-  const rep6 = noteCall(rep5.state, 'bash', { command: 'npm run build' })
-  check('第六次再次提醒', rep6.count === 6 && rep6.remind)
+  // 结果指纹：bash footer 里的耗时必须被抹掉，否则同命令同输出永远判成"结果不同"
+  const bashA = resultDigest(`${"x".repeat(20)}\n\n[exit 0 · 0.3s]`, false)
+  const bashB = resultDigest(`${"x".repeat(20)}\n\n[exit 0 · 1.9s]`, false)
+  check('footer 里的耗时不影响结果指纹', bashA === bashB, `${bashA} vs ${bashB}`)
+  check('退出码不同则指纹不同', resultDigest('out\n\n[exit 0 · 0.3s]', false) !== resultDigest('out\n\n[exit 1 · 0.3s]', false))
+  check('超时标记会被保留', stabilizeResult('out\n\n[exit killed · 超时 120s 已终止 · 120.0s]').includes('超时'))
+  check('isError 参与指纹', ok('same') !== bad('same'))
+  check(
+    '非 bash 内容原样参与指纹',
+    resultDigest('hello', false) !== resultDigest('hello2', false)
+  )
 
-  // 中间插入别的调用就重置——「连续」才有意义
-  const interrupted = noteCall(rep6.state, 'read', { path: 'a.txt' })
-  check('插入别的调用后计数重置', interrupted.count === 1)
-  const backAgain = noteCall(interrupted.state, 'bash', { command: 'npm run build' })
-  check('回到原调用也从 1 重新算', backAgain.count === 1 && !backAgain.remind)
-  console.log('\n[13e] 重复调用检测（端到端）')
-  const repSession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-repeat' })
-  const repEvents: AgentEvent[] = []
-  const repRunner = new AgentRunner(sessions, config, logger, (e) => repEvents.push(e))
+  // 模式 1：同参数同结果 —— 第 3 次提醒，第 4 次判定空转停止（对齐 OpenHands 阈值 4）
+  const key = callKey('read', { path: 'a.txt' })
+  const same = (n: number) => Array.from({ length: n }, () => ({ key, digest: ok("hello"), isError: false }))
+  check('1 次：不动作', assess(same(1)).action === 'none')
+  check('2 次：仍不动作', assess(same(2)).action === 'none')
+  check('3 次：只提醒（nudge）', assess(same(3)).action === 'nudge' && assess(same(3)).kind === 'identical')
+  check('4 次：判定空转（stop）', assess(same(4)).action === 'stop', JSON.stringify(assess(same(4))))
+  check(
+    '停止线来自 DEFAULTS.stopIdentical',
+    DEFAULTS.stopIdentical === 4 && assess(same(DEFAULTS.stopIdentical)).action === 'stop'
+  )
+
+  // 关键区别：参数相同但**结果不同** = 有进展，不报警（读正在变化的文件不该被误判）
+  const progressing = [
+    { key, digest: ok("v1"), isError: false },
+    { key, digest: ok("v2"), isError: false },
+    { key, digest: ok("v3"), isError: false },
+    { key, digest: ok("v4"), isError: false }
+  ]
+  check('同参数但结果在变：不算空转', assess(progressing).action === 'none', JSON.stringify(assess(progressing)))
+
+  // 模式 2：连续失败（不看参数是否相同）—— Cline 的维度
+  const failing = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      key: callKey('bash', { command: `attempt-${i}` }),
+      digest: bad(`error ${i}`),
+      isError: true
+    }))
+  check('连续 2 次失败：不动作', assess(failing(2)).action === 'none')
+  check('连续 3 次失败：提醒', assess(failing(3)).action === 'nudge' && assess(failing(3)).kind === 'failing')
+  check('连续 6 次失败：再提醒一次', assess(failing(6)).action === 'nudge')
+  check('连续 4 次失败：不重复刷屏', assess(failing(4)).action === 'none')
+
+  // 模式 3：A→B→A→B 交替循环（对齐 OpenHands alternating 阈值 6）
+  const ka = callKey("bash", { command: "npm run build" })
+  const kb = callKey("read", { path: "log.txt" })
+  const alternate = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      i % 2 === 0
+        ? { key: ka, digest: ok("build failed"), isError: false }
+        : { key: kb, digest: ok("same log"), isError: false }
+    )
+  check('4 步交替：不动作', assess(alternate(4)).action === 'none')
+  check(
+    '6 步交替：提醒',
+    assess(alternate(6)).action === 'nudge' && assess(alternate(6)).kind === 'alternating',
+    JSON.stringify(assess(alternate(6)))
+  )
+
+  // 提示文案必须带上工具名与次数，模型才知道改什么
+  check('提醒里带工具名与次数', Boolean(assess(same(3)).hint?.includes('read') && assess(same(3)).hint?.includes('3')))
+  check('停止提示说明不会再变', Boolean(assess(same(4)).hint?.includes('不会')))
+
+  console.log('\n[13e] 空转检测（端到端）')
+  // mock-loop 每轮都返回完全相同的 tool 调用（read demo/hello.txt），结果也恒定
+  const stuckSession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-stuck' })
+  const stuckEvents: AgentEvent[] = []
+  const stuckRunner = new AgentRunner(sessions, config, logger, (e) => stuckEvents.push(e))
   await new Promise<void>((resolve) => {
     const timer = setInterval(() => {
-      if (repEvents.some((e) => e.type === 'run_end')) {
+      if (stuckEvents.some((e) => e.type === 'run_end')) {
         clearInterval(timer)
         resolve()
       }
@@ -1247,29 +1293,29 @@ async function main(): Promise<void> {
       clearInterval(timer)
       resolve()
     }, 60_000)
-    repRunner.send(repSession.id, '反复读同一个文件')
+    stuckRunner.send(stuckSession.id, '反复读同一个文件')
   })
 
-  const repTools = sessions
-    .view(repSession.id)
+  const stuckTools = sessions
+    .view(stuckSession.id)
     .messages.filter((m): m is ToolMessage => m.role === 'tool' && m.name === 'read')
-  check('六次调用都执行了（没被中途掐断）', repTools.length === 6, `实际 ${repTools.length} 次`)
-  check('第 1、2 次没有提醒', !repTools[0].content.includes('重复调用提醒') && !repTools[1].content.includes('重复调用提醒'))
-  check('第 3 次在结果里提醒模型', repTools[2]?.content.includes('重复调用提醒') === true, repTools[2]?.content.slice(-120))
-  check('第 4、5 次不重复刷屏', !repTools[3]?.content.includes('重复调用提醒') && !repTools[4]?.content.includes('重复调用提醒'))
-  check('第 6 次再次提醒', repTools[5]?.content.includes('重复调用提醒') === true)
-  check('提醒里带上了工具名与次数', repTools[2]?.content.includes('read') && repTools[2]?.content.includes('连续第 3 次'))
+  check('跑到停止线就停（4 次调用，不是无限循环）', stuckTools.length === 4, `实际 ${stuckTools.length} 次`)
+  check('第 3 次的提醒进了 tool 结果', stuckTools[2]?.content.includes('重复调用提醒') === true)
+  check('第 4 次带空转判定说明', stuckTools[3]?.content.includes('空转判定') === true)
+  check('前两次没有任何噪音', !stuckTools[0]?.content.includes('提醒') && !stuckTools[1]?.content.includes('提醒'))
 
-  const repNotices = repEvents.filter(
-    (e): e is Extract<AgentEvent, { type: 'notice' }> => e.type === 'notice' && e.text.includes('检测到重复调用')
+  const stuckEnd = stuckEvents.find((e) => e.type === 'run_end')
+  check('结束状态是 stuck（不是 done / error）', stuckEnd?.type === 'run_end' && stuckEnd.status === 'stuck', JSON.stringify(stuckEnd))
+
+  const stuckNotices = stuckEvents.filter(
+    (e): e is Extract<AgentEvent, { type: 'notice' }> =>
+      e.type === 'notice' && (e.text.includes('同一调用连续') || e.text.includes('判定为空转'))
   )
-  check('用户侧也收到两条提醒', repNotices.length === 2, JSON.stringify(repNotices.map((n) => n.text)))
-  check('提醒级别是 warn', repNotices.every((n) => n.level === 'warn'))
+  check('用户侧收到提醒 + 停止两条', stuckNotices.length === 2, JSON.stringify(stuckNotices.map((n) => n.text)))
+  check('提醒是 warn，停止是 error', stuckNotices[0]?.level === 'warn' && stuckNotices[1]?.level === 'error', JSON.stringify(stuckNotices.map((n) => n.level)))
 
-  const repAssistants = sessions.view(repSession.id).messages.filter((m) => m.role === 'assistant')
-  check('模型自己收尾才结束（7 条 assistant）', repAssistants.length === 7, `${repAssistants.length}`)
-  const repEnd = repEvents.find((e) => e.type === 'run_end')
-  check('结束状态是 done 而非 error', repEnd?.type === 'run_end' && repEnd.status === 'done', JSON.stringify(repEnd))
+  // 变量已被前面的用例占用：清掉，避免干扰后续
+  stuckSession.id = stuckSession.id
 
   console.log('\n[13c] 上下文窗口解析（状态栏百分比）')
   const { resolveContextWindow } = await import('../src/shared/model-catalog')

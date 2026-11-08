@@ -326,7 +326,19 @@ export type AgentEvent =
   /** 上下文压缩完成：当前分支已切到摘要新分支，原分支完整保留 */
   | { type: 'session_compacted'; sessionId: string }
   | { type: 'notice'; sessionId: string; level: 'info' | 'warn' | 'error'; text: string }
-  | { type: 'run_end'; sessionId: string; status: 'done' | 'aborted' | 'error'; error?: AgentError }
+  /**
+   * status:
+   * - done    模型不再调用工具，正常收尾
+   * - aborted 用户中止（Esc）
+   * - stuck   判定为空转（同参数同结果反复），主动停下把控制权交回用户
+   * - error   请求或配置错误
+   */
+  | {
+      type: 'run_end'
+      sessionId: string
+      status: 'done' | 'aborted' | 'stuck' | 'error'
+      error?: AgentError
+    }
 
 export interface Bootstrap {
   config: PublicConfig

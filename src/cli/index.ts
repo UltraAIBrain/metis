@@ -144,6 +144,7 @@ function renderEvent(e: AgentEvent): void {
     case 'run_end': {
       sigintPending = false
       if (e.status === 'aborted') write(`  ${c.yellow('已中止')}\n`)
+      if (e.status === 'stuck') write(`  ${c.yellow('已判定空转并停下（换一种问法或补充信息即可继续）')}\n`)
       if (runningIds.size === 0) rlRef?.prompt()
       break
     }

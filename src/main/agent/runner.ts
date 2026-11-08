@@ -27,28 +27,30 @@ import { pluginHost } from '../plugins'
 import { ensureProjectDir } from '../projects'
 import { paths } from '../paths'
 import { validAttachmentsFor } from '../attachments'
-import { noteCall, type RepeatState } from './repeat-guard'
+import { assess, callKey, resultDigest, type Outcome } from './stuck-guard'
 
 /** 子过程落盘时工具输出的回放截断（回放够用，防单行 JSON 数 MB） */
 const SUB_TOOL_CLIP = 8_000
 
 /**
- * 提醒模型换思路。追加在 tool 结果末尾而不是单独一条消息——
+ * 把守卫给出的提示追加到 tool 结果末尾，而不是单独发一条消息——
  * 这样它就在模型下一步必然读到的位置，又不破坏 tool_use / tool_result 的配对结构。
  */
-function repeatHintForModel(tool: string, count: number): string {
-  return [
-    '---',
-    `[重复调用提醒] 这是连续第 ${count} 次用完全相同的参数调用 ${tool}。`,
-    '如果本次结果和上次一致，说明这一步没有带来任何新信息：换一种做法（改参数 / 换工具 / 先读报错），' +
-      '或者停下来向用户说明卡在哪里。此提醒不中断运行，下一步怎么做由你决定。',
-    '（如果这条命令本来就是幂等的查询或验证，忽略此提醒继续即可。）'
-  ].join('\n')
+function withHint(content: string, hint?: string): string {
+  return hint ? `${content}\n\n---\n${hint}` : content
 }
 
-/** 给用户的提示：说明发生了什么、已经做了什么、用户可以怎么接管 */
-function repeatNoticeText(tool: string, count: number): string {
-  return `检测到重复调用：${tool} 已连续 ${count} 次参数完全相同，已提示模型换思路。若它继续原地打转，可以按 Esc 中止后自己接手。`
+/** 给用户的提示：说明发生了什么、已经做了什么、用户能怎么接管 */
+function stuckNoticeText(kind: string | undefined, count: number, stopping: boolean): string {
+  const what =
+    kind === 'failing'
+      ? `连续 ${count} 次工具调用都失败`
+      : kind === 'alternating'
+        ? `最近 ${count} 步在两个动作之间反复交替`
+        : `同一调用连续 ${count} 次拿到完全相同的输出`
+  return stopping
+    ? `判定为空转：${what}，不再有进展，本次运行已停止。可以换个说法继续，或自己接手。`
+    : `检测到 ${what}，已提示模型换思路。若它继续原地打转，可以按 Esc 中止后自己接手。`
 }
 
 /** 上下文压缩的总结提示词：产出结构化摘要，供新分支继续工作 */
@@ -67,8 +69,11 @@ interface ActiveRun {
   abort: AbortController
   queue: string[]
   startedAt: number
-  /** 连续相同调用的计数（只关心"连续"，中间插了别的调用就重置） */
-  repeat?: RepeatState
+  /**
+   * 本次 run 内的工具结果窗口（空转检测用）。
+   * 有新的用户消息注入时清空——与 OpenHands「按最后一条 user 消息切窗口」一致。
+   */
+  outcomes?: Outcome[]
 }
 
 /**
@@ -237,9 +242,11 @@ export class AgentRunner {
       }
     }
     const providerId = profile.protocol
-    let status: 'done' | 'aborted' | 'error' = 'done'
+    let status: 'done' | 'aborted' | 'stuck' | 'error' = 'done'
     let failure: AgentError | undefined
     let steps = 0
+    /** 空转判定为 stop 时置位：跑完当前这批工具就收尾，不打断已发出的调用 */
+    let stuckStop = false
     this.emit({ type: 'run_start', sessionId, at: Date.now() })
     this.log.info('run.start', {
       sessionId,
@@ -289,6 +296,8 @@ export class AgentRunner {
           this.sessions.append(sessionId, injected)
           this.emit({ type: 'message_added', sessionId, message: injected })
           this.log.info('run.inject_steering', { sessionId })
+          // 用户补充了新信息，之前的空转计数作废（窗口按最后一条 user 消息切）
+          run.outcomes = []
         }
 
         if (run.abort.signal.aborted) {
@@ -475,8 +484,8 @@ export class AgentRunner {
             }
             const history: Message[] = [{ role: 'user', id: newId('u'), ts: Date.now(), text: prompt }]
             let steps = 0
-            /** 子智能体自己的连续计数，与父循环互不影响 */
-            let repeat: RepeatState | undefined
+            /** 子智能体自己的结果窗口，与父循环互不影响 */
+            const subOutcomes: Outcome[] = []
             const subTools = toolSpecs({ forSubAgent: true, subagentType: type })
             // 子智能体的系统提示词：主提示词 + 按类型的身份说明
             const typeBrief =
@@ -565,8 +574,6 @@ export class AgentRunner {
                   name: call.name,
                   phase: 'start'
                 })
-                const verdict = noteCall(repeat, call.name, call.input)
-                repeat = verdict.state
                 const raw = await executeTool(call.name, call.input, {
                   workspace: cwd,
                   shell: cfg.shell,
@@ -574,18 +581,22 @@ export class AgentRunner {
                   log: (event, data) => this.log.info(event, data)
                   // 刻意不传 spawnSubAgent：子智能体不能再派生
                 })
-                const out =
-                  verdict.remind && raw
-                    ? { ...raw, content: `${raw.content}\n\n${repeatHintForModel(call.name, verdict.count)}` }
-                    : raw
-                if (verdict.remind) {
-                  this.log.warn('tool.repeat_detected', {
+                subOutcomes.push({
+                  key: callKey(call.name, call.input),
+                  digest: resultDigest(raw.content, raw.isError),
+                  isError: raw.isError
+                })
+                const verdict = assess(subOutcomes)
+                if (verdict.action !== 'none') {
+                  this.log.warn('tool.stuck_detected', {
                     sessionId,
                     subagent: label,
-                    tool: call.name,
+                    kind: verdict.kind,
+                    action: verdict.action,
                     count: verdict.count
                   })
                 }
+                const out = { ...raw, content: withHint(raw.content, verdict.hint) }
                 this.emit({
                   type: 'subagent_tool',
                   sessionId,
@@ -623,10 +634,6 @@ export class AgentRunner {
             const started = Date.now()
             usedTools = true
 
-            // 连续相同调用 = 空转信号。只提醒，不中止：循环何时停仍由模型/用户决定。
-            const verdict = noteCall(run.repeat, call.name, call.input)
-            run.repeat = verdict.state
-
             const raw = await executeTool(call.name, call.input, {
               workspace: cwd,
               shell: cfg.shell,
@@ -638,23 +645,32 @@ export class AgentRunner {
               spawnSubAgent: allowSpawn ? subLoop : undefined
             })
 
-            const out =
-              verdict.remind && raw
-                ? { ...raw, content: `${raw.content}\n\n${repeatHintForModel(call.name, verdict.count)}` }
-                : raw
-            if (verdict.remind) {
-              this.log.warn('tool.repeat_detected', {
+            run.outcomes = run.outcomes ?? []
+            run.outcomes.push({
+              key: callKey(call.name, call.input),
+              digest: resultDigest(raw.content, raw.isError),
+              isError: raw.isError
+            })
+            // 空转判定：nudge 只提醒；stop 说明「再试也不会变」，把控制权交回用户。
+            // 判据是「有没有产生新信息」，不是步数。
+            const verdict = assess(run.outcomes)
+            if (verdict.action !== 'none') {
+              this.log.warn('tool.stuck_detected', {
                 sessionId,
                 tool: call.name,
+                kind: verdict.kind,
+                action: verdict.action,
                 count: verdict.count
               })
               this.emit({
                 type: 'notice',
                 sessionId,
-                level: 'warn',
-                text: repeatNoticeText(call.name, verdict.count)
+                level: verdict.action === 'stop' ? 'error' : 'warn',
+                text: stuckNoticeText(verdict.kind, verdict.count, verdict.action === 'stop')
               })
+              if (verdict.action === 'stop') stuckStop = true
             }
+            const out = { ...raw, content: withHint(raw.content, verdict.hint) }
 
             const toolMessage: ToolMessage = {
               role: 'tool',
@@ -690,6 +706,10 @@ export class AgentRunner {
 
           if (run.abort.signal.aborted) {
             status = 'aborted'
+            break
+          }
+          if (stuckStop) {
+            status = 'stuck'
             break
           }
           continue

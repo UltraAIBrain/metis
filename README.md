@@ -95,7 +95,7 @@ pidesktop/
     │       ├── prompt.ts        # 极简提示词 + AGENTS/SOUL/USER/记忆/技能/插件注入
     │       ├── memory-store.ts  # MEMORY.md 读写、检索式注入、图谱与全息出处
     │       ├── sanitize.ts      # 补齐未配对的 tool_use / tool_result
-    │       ├── repeat-guard.ts  # 连续相同调用的检测（空转信号，只提示不中止）
+    │       ├── stuck-guard.ts   # 空转检测：同参数同结果 → 提醒 / 判定停止（无步数上限）
     │       ├── diff.ts          # 行级 diff（给 edit 用）
     │       ├── errors.ts        # 错误分类与用户提示
     │       ├── tools/           # 10 个内置工具 + 路径守卫
@@ -499,9 +499,11 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 32. 闭环学习：记忆分词检索（拉丁 + CJK 2-gram、相关条目排最前）、超限检索式注入（相关 + 最新、长度受控）、
     nudge 触发与消除、技能 write/list/read、fetch 的 HTML 正文提取与非 http 拒绝、
     USER.md / SOUL.md / 技能索引注入 system prompt；
-33. 重复调用检测：参数指纹按键序规范化（`{a,b}` 与 `{b,a}` 同指纹、工具名不同即不同指纹）、
-    连续第 3/6 次提醒而第 1/2/4/5 次不刷屏、插入别的调用后计数重置、
-    端到端跑 6 次相同调用（第 3、6 次在 tool 结果里提醒、用户侧收到两条 warn、六次全部执行完、模型自己收尾才结束）；
+33. 空转检测：参数指纹与结果指纹（键序无关、bash footer 耗时被抹掉、退出码/isError 参与指纹）、
+    四种模式各自的阈值（1–2 次不动作、3 次 nudge、4 次 stop、同参数但结果变化不算空转、
+    连续失败 3 次提醒且第 4 次不刷屏、A→B→A→B 交替 4 步不动作 / 6 步提醒）、
+    端到端跑完全相同的调用（第 3 次提醒进 tool 结果、第 4 次带空转判定、前两次无噪音、
+    `run_end.status === stuck`、用户侧收到 warn + error 两条）；
 34. ZCode 借鉴：插件 beforeTool 钩子（deny/modify/放行 + executeTool 全链路）、ask 桥（投递/回填/结果）、
     cron（解析/匹配/OR 语义/非法拒绝）、跨会话检索（命中与空查询）、chart（解析/拒绝坏数据/几何/折线 path）。
 
@@ -520,12 +522,27 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 - **不设步数上限**：一轮任务跑多少步由模型自己决定，循环的终止条件只有「模型不再调用工具」和用户 `Esc`。
   步数是与任务难度无关的代理指标（改一处代码 3 步、大重构 60 步都正常），拿它当闸门只会误杀长任务。
   真正会杀死任务的是上下文窗口，由状态栏的占用比例 + 手动压缩兜底。
-- **重复调用检测**：真正值得报警的是「空转」——同样的工具 + **完全相同的参数**连续出现。
-  连续第 3 次起，在第 3、6、9… 次往 tool 结果末尾追加一条提醒（模型下一步必然读到），
-  同时给状态栏一条 warn。规范化的参数比较按键名排序，`{path, limit}` 与 `{limit, path}` 算同一次；
-  中间插了别的调用计数就重置——只有「连续」才是异常信号。
-  **只提示，不中止**：是否换思路、何时收尾仍由模型决定，用户随时可以 `Esc` 接管。
-  主循环与子智能体的计数各自独立（两边的调用交错，共用一份会互相干扰）。
+- **空转检测（stuck guard）**：真正值得报警的是「这一步有没有产生新信息」，不是跑了多少步。
+  判据与主流对齐（下表为源码/官方文档核实的结果）：
+
+  | 项目 | 判据 | 处置 |
+  | --- | --- | --- |
+  | OpenHands SDK | 同 action + **同 observation**（4）、action+error（3）、monologue（3）、A→B→A→B 交替（6），窗口按最后一条 user 消息切 | action-error 只 nudge；`is_stuck()` → `execution_status=STUCK` 停止 |
+  | Cline | **按错误**：api_error / invalid_tool_call / tool_execution_failed | 到限后问用户「换个思路 / 停止」 |
+  | Claude Code | 无内置重复检测 | 只封自己制造的循环（stop hook 连击 8 次、compact thrashing） |
+  | Codex CLI | 无（源码 0 命中轮次/重复检测） | 用户中断 + 上下文窗口 + 审批/sandbox |
+
+  本项目的实现分两档，判据只有「有没有新信息」：
+
+  - **nudge（只提醒，继续跑）**：同参数同结果连续 3 次 / 连续失败 3 次（不看参数是否相同）/ A→B→A→B 交替 6 次。
+    提醒追加在 tool 结果末尾（模型下一步必然读到，且不破坏 tool_use / tool_result 配对）。
+  - **stop（结束本次 run）**：**同参数 + 同结果连续 4 次**——这是唯一「再试一次也不会变」的铁证。
+    此时 `run_end.status = stuck`，会话保留，补充信息后继续即可。
+
+  几个实现细节：参数指纹按键名递归排序（`{path, limit}` 与 `{limit, path}` 同指纹）；
+  结果指纹会把 bash footer 里的耗时抹掉（否则同命令同输出永远判成「结果不同」，停止线永不触发）；
+  **同参数但结果在变不算空转**（读一个正在被改的文件是有进展的，不该误伤）；
+  用户注入 steering 时窗口清空（与 OpenHands 按最后一条 user 消息切窗口一致）；主循环与子智能体各持一份。
 - **上下文占用的分母按「接口 → 内置表」取值**：模型窗口优先用服务商 `/models` 返回的 `context_length`，
   只有接口没给时才回落到内置兜底表；否则像 `deepseek-flash`（接口 1M、表里泛化的 128K）这种会被算成 161%，
   封顶显示成常年的假 100%。鼠标悬停在占比上可看到「输入 token / 窗口 token」的原始数值。
