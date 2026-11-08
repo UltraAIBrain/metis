@@ -351,8 +351,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return cwd
   }
 
-  /* ---------------- 工作空间面板 ---------------- */
-
   ipcMain.handle(IPC.workspaceOpen, (_e, id: string): Promise<void> => openWorkspace(requireCwd(id)))
 
   ipcMain.handle(IPC.workspaceChanges, (_e, id: string) => workspaceChanges(requireCwd(id)))
