@@ -30,10 +30,10 @@
   <rect x="52" y="52" width="920" height="920" rx="212" fill="url(#lift)"/>
   <rect x="54" y="54" width="916" height="916" rx="210" fill="none" stroke="#ffffff" stroke-opacity="0.09" stroke-width="2"/>
 
-  <!-- π -->
-  <g fill="none" stroke="url(#ink)" stroke-width="82" stroke-linecap="round">
-    <path d="M292 376H732"/>
-    <path d="M398 376V648"/>
-    <path d="M626 376V648"/>
+  <!-- M -->
+  <g fill="none" stroke="url(#ink)" stroke-width="82" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M333 732V376"/>
+    <path d="M333 376L512 588L691 376"/>
+    <path d="M691 376V732"/>
   </g>
 </svg>

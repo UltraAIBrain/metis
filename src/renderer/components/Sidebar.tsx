@@ -157,25 +157,15 @@ export const Sidebar = memo(function Sidebar(): JSX.Element {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <span className="brand-mark">π</span>
+        <span className="brand-mark">M</span>
         <span className="brand-text">
-          pi <span className="brand-dim">desktop</span>
+          Metis
         </span>
       </div>
 
       <div className="new-row">
         <button className="new-session" type="button" onClick={() => void store.newSession('auto')}>
           <span className="plus">＋</span> 新建项目
-        </button>
-        <button
-          className="new-session-pick"
-          type="button"
-          title="选择已有目录新建项目"
-          onClick={() => void store.newSession('pick')}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-            <path d="M2 4.5h4l1.2 1.5H14v7H2z" strokeLinejoin="round" />
-          </svg>
         </button>
       </div>
 

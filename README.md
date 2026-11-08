@@ -1,4 +1,4 @@
-# Pi Desktop
+# Metis
 
 把 [pi](https://pi.dev) 这个极简编码代理搬到桌面上：一个可双击启动、看得见工具调用、能随时插话或回退的应用。
 底层仍然是 pi 的取向——**少而正交的工具、极短的提示词、不替你做决定**——只是把终端里的 TUI 换成了更易读的桌面交互。
@@ -50,7 +50,7 @@
 ## 4. 项目结构
 
 ```
-pidesktop/
+metis/
 ├── electron.vite.config.ts      # 三层构建配置
 ├── electron-builder.yml         # 打包配置（win/mac/linux）
 ├── tsconfig.node.json           # 主进程 / preload / scripts
@@ -60,7 +60,7 @@ pidesktop/
 ├── scripts/make-icon.cjs        # 由 icon.svg 渲染 png / 多尺寸 ico
 ├── build/                       # 打包资源：icon.svg / icon.png / icon.ico
 └── src/
-    ├── cli/index.ts             # 终端版 REPL（npm run pi），与桌面版共用 agent 核心
+    ├── cli/index.ts             # 终端版 REPL（npm run metis），与桌面版共用 agent 核心
     ├── shared/                  # 主/渲染共享的领域类型与 IPC 通道名
     │   ├── types.ts
     │   ├── ipc.ts
@@ -156,7 +156,7 @@ pidesktop/
 ```bash
 npm install
 
-npm run pi         # 终端版（纯 Node REPL，与桌面版共用全部核心）
+npm run metis         # 终端版（纯 Node REPL，与桌面版共用全部核心）
 npm run dev        # 开发模式（渲染层 HMR）
 npm run build      # 编译到 out/
 npm start          # 以生产产物启动（本地预览）
@@ -245,7 +245,7 @@ npm run dist:linux # Linux AppImage
 
 **工作目录同理，而且更彻底**：它只存在于会话 meta 的 `cwd` 里，没有全局工作目录。
 
-- 新建项目**可以不指定目录**：第一次发送消息时，会在 `~/.pidesktop/projects/<guid>` 下自动开一个；
+- 新建项目**可以不指定目录**：第一次发送消息时，会在 `~/.metis/projects/<guid>` 下自动开一个；
   也可以点「选择目录…」/ 侧栏的文件夹按钮，直接把已有仓库建成项目（`Ctrl+Shift+N`）；
 - 目录显示在**会话窗口顶栏**（`📁 目录名`），点它就能换；左侧卡片上也带目录名，便于区分同名项目；
 - **会话一旦开始就不能再改目录**（有任意一条消息即视为开始）：顶栏控件变成带锁的只读态，
@@ -260,21 +260,22 @@ npm run dist:linux # Linux AppImage
   命令与观察）或 **JSON**（机器可读完整结构）。状态栏实时显示本会话累计的步数与 token。
 - **子智能体**（`task` 工具）：模型可派生子 agent 独立完成自包含子任务（探索代码、跑测试并汇总、
   跨文件搜索）。子 agent 有独立消息历史（看不到主对话）、共用工作目录与模型、随主任务中止而中止；
-  过程不落盘，只把文本汇报作为工具结果写回父会话；**不可再嵌套派生**。工具卡片显示
+  过程单独落盘，只把文本汇报作为工具结果写回父会话；**不可再嵌套派生**。工具卡片显示
   「N 步」徽标（步数 / token / 耗时），轨迹里同样带统计。
   同一轮里的多个 task 调用**并行执行**（混合轮次仍串行以保证文件操作可预测）；
   子任务执行期间界面实时显示它正在跑的工具（进度事件只喂 UI，不进历史）。
   三种子类型：`general`（全工具）/ `explore`（只读调研）/ `plan`（产出实施计划）——只读类型
-  物理上没有 write/edit 工具（插件工具同样不进子任务）。每个子任务的完整过程落盘到
+  不提供 write/edit/bash/memory/skills，执行时也按该子任务的工具白名单校验；插件工具不进子任务。
+  `general` 仍可执行 bash 和修改文件。每个子任务的完整过程落盘到
   `sessions/<id>.subagents.jsonl`（回放时工具输出按 8KB 截断），
   轨迹 JSON 导出按 taskCallId 关联（`subProcesses` 字段，只含当前分支的调用），
   Markdown 导出末尾带「子任务过程」回放段，删除会话时一并清理。
 
 - **记忆系统**（`memory` 工具 + 全局 MEMORY.md，参考 Claude Code auto memory / Codex AGENTS.md，
   并扩展了 **MemoryGraph** 记忆图谱、**Hermes 式全息上下文**、**检索式注入**与**主动 nudge**）：
-  - 分层：项目层 `AGENTS.md`（工作目录里，手动/模型维护，已有）→ 用户层 `~/.pidesktop/USER.md`
+  - 分层：项目层 `AGENTS.md`（工作目录里，手动/模型维护，已有）→ 用户层 `~/.metis/USER.md`
     （用户画像：这个用户是谁、习惯怎么协作；`memory scope=user` 维护，全量注入）→
-    全局层 `~/.pidesktop/MEMORY.md`（项目/世界知识，模型自主维护）→ 会话历史（JSONL，自动）。
+    全局层 `~/.metis/MEMORY.md`（项目/世界知识，模型自主维护）→ 会话历史（JSONL，自动）。
   - `memory(action, scope?)`：`read` / `append`（自动带日期）/ `rewrite`（精简）；
     `scope=user` 三个动作操作 USER.md（上限 4000 字符）。
   - **检索式注入**：记忆文件不超 8000 字符时整份注入；超限后不再粗暴截尾，而是按
@@ -292,12 +293,12 @@ npm run dist:linux # Linux AppImage
     `memory-holo.json`）；`related` 召回结果附带这些出处。rewrite 精简时自动清理失效条目的图与全息。
 
 - **技能自创**（`skills` 工具，agent 的过程记忆，agentskills.io 风格）：
-  模型把可复用的过程（环境搭建步骤、发布清单、排障套路）写成 `~/.pidesktop/skills/<id>/SKILL.md`
+  模型把可复用的过程（环境搭建步骤、发布清单、排障套路）写成 `~/.metis/skills/<id>/SKILL.md`
   （frontmatter 一行描述 + markdown 正文），system prompt 只注入**一行索引**、正文按需 `read`——
   技能多了也不烧 token。规则 11：开工前查索引，有匹配就先读再照做；做完发现技能不对就改进它。
   纯文本过程说明，不是可执行代码。
 
-- **人格文件 SOUL.md**：`~/.pidesktop/SOUL.md` 存在即注入 system prompt（口吻、称呼、回复风格）；
+- **人格文件 SOUL.md**：`~/.metis/SOUL.md` 存在即注入 system prompt（口吻、称呼、回复风格）；
   设置 → 通用 →「编辑人格文件」创建并打开（首次给注释模板）。留空/删除即恢复默认风格。
 
 - **fetch 工具**（agent 侧网页阅读）：GET 一个 http(s) 地址返回正文文本——HTML 剥标签/脚本/样式、
@@ -332,7 +333,7 @@ npm run dist:linux # Linux AppImage
 「设置 → 插件」可以手动安装、启用/停用、卸载。一个插件就是一个目录：
 
 ```
-~/.pidesktop/plugins/web-tools/
+~/.metis/plugins/web-tools/
 ├── plugin.json     # { "name", "version", "description", "main" }
 └── index.js        # module.exports = { instructions?, tools? }
 ```
@@ -355,7 +356,7 @@ module.exports = {
 - `ctx` 提供 `{ workspace, signal, log, resolve(p) }`；`resolve()` 自带路径守卫，只能解析到本项目目录内。
 - 工具名需匹配 `^[a-z][a-z0-9_]{1,40}$`，与内置 `read/write/edit/bash` 冲突时内置优先。
 - 插件注册的工具会一起进入模型可用的工具清单；`instructions` 会追加到系统提示词末尾。
-- 安装方式：选插件文件（`plugin.json` / `.js`）或整个目录；也可以把文件夹直接丢进 `~/.pidesktop/plugins`，再点「重新加载」。
+- 安装方式：选插件文件（`plugin.json` / `.js`）或整个目录；也可以把文件夹直接丢进 `~/.metis/plugins`，再点「重新加载」。
 - **PreToolUse 钩子**：插件可导出 `hooks.beforeTool({ tool, input })`，在**每次**工具执行前裁决——
   `deny` 拦截并说明原因、`modify` 改写参数（后一个插件看到改后的）、返回空视为放行。
   钩子异常按放行处理（fail-open，审计插件故障不卡死代理）。适合做写操作审计、危险命令拦截。
@@ -366,10 +367,10 @@ module.exports = {
 > **安全边界**：插件是本地 JS，由主进程 `require` 执行——安装即等于在你的机器上运行它。
 > 应用不做沙箱，只装你信任来源的插件。
 
-**数据目录**（统一在 `~/.pidesktop`，三平台一致）
+**数据目录**（统一在 `~/.metis`，三平台一致）
 
 ```
-~/.pidesktop/
+~/.metis/
 ├── config.json                 # 全局默认（模型偏好、参数、窗口位置）
 ├── sessions/                   # 每个会话一个 .jsonl + .meta.json（含 cwd / profileId / model）
 │   └── <id>.subagents.jsonl    # 会话的子任务过程记录（轨迹导出用；删除会话时清理）
@@ -387,7 +388,7 @@ module.exports = {
 ```
 
 > 旧版本把数据放在 Electron userData（Windows 是 `%APPDATA%/pi-desktop`）。
-> 升级后首次启动会把 `config.json` / `sessions` / `logs` 自动搬到 `~/.pidesktop`，不覆盖已有数据。
+> 升级后首次启动会把 `config.json` / `sessions` / `logs` 自动搬到 `~/.metis`，不覆盖已有数据。
 
 ## 8. 交互约定
 
@@ -420,7 +421,8 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 ## 9. 稳定性设计
 
 - **路径守卫**：`resolveInside()` 以**当前会话的目录**为根，对每个文件操作做 `relative` 校验，`../` 与绝对路径越界一律拒绝；
-  对已存在的目标再做 `realpath` 解析，工作目录内指向外部的符号链接同样不允许越界；
+  对目标或最近存在的父目录做 `realpath` 解析，新建文件也不能通过符号链接或 junction 写到目录外；
+  悬空链接和无法验证真实路径的目标拒绝访问；
   工作空间面板的变更差异与产物打开同样只允许目录内的相对路径（并做真实路径校验）。
 - **bash 不在路径守卫之内**：`bash` 在工作目录里起进程，但命令本身可以 `cd` 或用绝对路径读到目录外的东西
   ——这是"能跑构建 / 测试 / git"的前提，不是遗漏。越界拦截只对 `read` / `write` / `edit` 与面板操作生效；
@@ -451,10 +453,10 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 - **渲染层隔离**：`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，能力全部经 preload 白名单暴露。
 - **单实例**：重复启动只会聚焦已有窗口。
 - **托盘常驻**：关闭窗口 = 最小化到托盘（窗口状态照常保存，后台任务继续跑）；托盘左键切换显隐，
-  右键菜单「打开 Pi Desktop / 退出」，真正退出只从托盘或退出菜单走；窗口藏在托盘时任务结束弹气泡提醒。
+  右键菜单「打开 Metis / 退出」，真正退出只从托盘或退出菜单走；窗口藏在托盘时任务结束弹气泡提醒。
   托盘图标为小尺寸专用绘制（深色圆角方块 + 粗笔画 π，SDF 逐像素渲染 + 内存多尺寸 ICO），
   不依赖大图缩放，小尺寸边缘锐利。
-- **终端版**（`npm run pi`；需先 `npm run build` 生成 `out/main/cli.js`）：纯 Node REPL，零 Electron 依赖，与桌面版共用
+- **终端版**（`npm run metis`；需先 `npm run build` 生成 `out/main/cli.js`）：纯 Node REPL，零 Electron 依赖，与桌面版共用
   runner / 会话 / 工具 / 插件 / 记忆 / 轨迹 / 子智能体全部核心。流式渲染（文本直写、
   工具行 `⏺ name 参数` → `✓ 结果 · 耗时`、用量行），运行中再输入会排队注入（steering），
   Ctrl+C 只中止当前任务。  命令：`/help /new /sessions /switch /model /thinking /login /logout /compact /attach /export /memory /tools /quit`。

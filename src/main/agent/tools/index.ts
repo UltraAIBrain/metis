@@ -38,14 +38,14 @@ const SUB_EXCLUDE = new Set(['task'])
 const MEMORY_TOOL = 'memory'
 const SKILLS_TOOL = 'skills'
 
-/** 记忆与技能由主 agent 维护：并行子任务同时写会有交错风险 */
+/** 记忆与技能会持久化数据，不提供给只读子智能体。 */
 const CURATED_TOOLS = [MEMORY_TOOL, SKILLS_TOOL]
 
-/** 各子类型的额外排除：explore/plan 只读，物理上不能改文件 */
+/** shell 能任意写文件，不能作为 explore/plan 的只读工具。 */
 const SUB_TYPE_EXCLUDE: Record<string, Set<string>> = {
   general: new Set<string>(),
-  explore: new Set(['write', 'edit', ...CURATED_TOOLS]),
-  plan: new Set(['write', 'edit', ...CURATED_TOOLS])
+  explore: new Set(['write', 'edit', 'bash', ...CURATED_TOOLS]),
+  plan: new Set(['write', 'edit', 'bash', ...CURATED_TOOLS])
 }
 
 const BUILTIN_NAMES = new Set(BUILTIN_TOOLS.map((t) => t.spec.name))
@@ -79,6 +79,10 @@ export async function executeTool(
   input: Record<string, unknown>,
   ctx: ToolContext
 ): Promise<ToolResult> {
+  if (ctx.allowedTools && !ctx.allowedTools.has(name)) {
+    ctx.log('tool.not_allowed', { tool: name })
+    return { content: `Error: 当前执行器未授权工具 ${name}。`, isError: true }
+  }
   // 插件 PreToolUse 钩子链：deny 拦截、modify 改参（审计/风控类插件挂这里，fail-open）
   const gate = pluginHost.runBeforeTool(name, input)
   if (gate.denied) {

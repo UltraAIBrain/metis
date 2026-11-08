@@ -211,7 +211,7 @@ export function startLogin(opts: OauthEndpoints = {}): LoginHandle {
       res.end(
         '<html><body style="font-family:system-ui;padding:40px;text-align:center">' +
           (code && backState === state
-            ? '<h2>登录成功</h2><p>可以回到 Pi Desktop 继续使用。</p>'
+            ? '<h2>登录成功</h2><p>可以回到 Metis 继续使用。</p>'
             : '<h2>登录未完成</h2><p>请回到应用重试。</p>') +
           '</body></html>'
       )

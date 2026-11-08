@@ -2,6 +2,9 @@ import { memo, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, 
 import type { PickedFile } from '@shared/types'
 import { DRAFT_ID, store, type SendOutcome } from '../store'
 import { formatSize } from '../util'
+import { SessionDir } from './SessionDir'
+import { SessionModelPicker } from './SessionModelPicker'
+import { SessionThinking } from './SessionThinking'
 
 interface Props {
   sessionId: string
@@ -12,7 +15,7 @@ interface Props {
   model: string
   /** 当前模型是否接受图片输入；不支持时图片附件会被拦下并说明原因 */
   supportsImages: boolean
-  onSend: (text: string, files: PickedFile[]) => Promise<SendOutcome | null>
+  onSend: (sessionId: string, text: string, files: PickedFile[]) => Promise<SendOutcome | null>
   onAbort: () => void
 }
 
@@ -238,7 +241,7 @@ export const Composer = memo(function Composer({
     const targetSession = sessionId
     setSending(true)
     void resolveMentions(text)
-      .then((extra) => onSend(text, [...files, ...extra]))
+      .then((extra) => onSend(targetSession, text, [...files, ...extra]))
       .then((outcome) => {
         if (!outcome) return
         if (outcome.ok) {
@@ -347,24 +350,13 @@ export const Composer = memo(function Composer({
       )}
 
       <div className={`composer-box ${running ? 'running' : ''} ${dragOver ? 'drop' : ''}`}>
-        <button
-          className="btn-attach"
-          type="button"
-          title="添加附件（图片或文本文件，也可直接粘贴 / 拖入）"
-          onClick={() => void pick()}
-          disabled={disabled || staging || sending}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-            <path d="M11.5 4.5 5.9 10.1a1.8 1.8 0 0 0 2.5 2.5l5.4-5.4a3 3 0 0 0-4.3-4.3L4 8.4a4.2 4.2 0 0 0 6 6l4.8-4.9" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
         <textarea
           ref={ref}
           value={value}
           rows={1}
           placeholder={
             needsModel
-              ? '请先在顶栏选择一个模型'
+              ? '请先在下方选择一个模型'
               : running
                 ? '继续补充要求，会追加到当前任务…'
                 : '描述你要做的改动，Enter 发送；@ 引用文件，可粘贴或拖入图片'
@@ -398,26 +390,50 @@ export const Composer = memo(function Composer({
             })}
           </div>
         )}
-        <div className="composer-actions">
-          {running && (
-            <button className="btn-stop" type="button" onClick={onAbort} title="停止当前任务（Esc）">
-              <span className="stop-square" />
-              停止
+        <div className="composer-toolbar">
+          <div className="toolbar-left">
+            <button
+              className="btn-attach"
+              type="button"
+              title="添加附件（图片或文本文件，也可直接粘贴 / 拖入）"
+              onClick={() => void pick()}
+              disabled={disabled || staging || sending}
+            >
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                <path d="M11.5 4.5 5.9 10.1a1.8 1.8 0 0 0 2.5 2.5l5.4-5.4a3 3 0 0 0-4.3-4.3L4 8.4a4.2 4.2 0 0 0 6 6l4.8-4.9" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </button>
-          )}
-          <button
-            className={`btn-send ${running ? 'queue' : ''}`}
-            type="button"
-            onClick={submit}
-            disabled={(!value.trim() && !pending.length) || disabled || staging || sending}
-          >
-            {staging || sending ? '…' : running ? '追加' : '发送'}
-          </button>
+            <SessionDir />
+            <SessionModelPicker />
+            <SessionThinking />
+          </div>
+          <div className="composer-actions">
+            {running && (
+              <button className="btn-stop" type="button" onClick={onAbort} title="停止当前任务（Esc）">
+                <span className="stop-square" />
+              </button>
+            )}
+            <button
+              className={`btn-send ${running ? 'queue' : ''}`}
+              type="button"
+              onClick={submit}
+              disabled={(!value.trim() && !pending.length) || disabled || staging || sending}
+              title={running ? '追加到当前任务' : '发送（Enter）'}
+            >
+              {staging || sending ? (
+                <span className="send-spin" />
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 13V3M3.5 7.5L8 3l4.5 4.5" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="composer-hint">
-        <span>
+      <div className="composer-meta">
+        <span className="composer-hint">
           <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行
           {running ? ' · ' : ''}
           {running ? (
@@ -426,7 +442,6 @@ export const Composer = memo(function Composer({
             </>
           ) : null}
         </span>
-        <span className="hint-model">{model}</span>
       </div>
     </div>
   )

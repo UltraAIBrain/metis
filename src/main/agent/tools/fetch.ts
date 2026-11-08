@@ -93,7 +93,7 @@ export const fetchTool: AgentTool = {
         method: 'GET',
         redirect: 'follow',
         signal: AbortSignal.timeout(TIMEOUT_MS),
-        headers: { 'user-agent': 'Mozilla/5.0 (compatible; PiDesktopAgent/1.0)' }
+        headers: { 'user-agent': 'Mozilla/5.0 (compatible; MetisAgent/1.0)' }
       })
     } catch (err) {
       const name = (err as Error).name

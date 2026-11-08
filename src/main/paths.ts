@@ -3,14 +3,14 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /**
- * 数据根目录。桌面运行时默认 ~/.pidesktop（配置、会话、日志、插件、自动项目目录都在这里）；
- * 纯 Node 环境（冒烟测试）可用 PI_DESKTOP_HOME 指到临时目录。
+ * 数据根目录。桌面运行时默认 ~/.metis（配置、会话、日志、插件、自动项目目录都在这里）；
+ * 纯 Node 环境（冒烟测试）可用 METIS_HOME 或旧名 PI_DESKTOP_HOME 指到临时目录。
  */
 let dataDir: string | null = null
 
 export function initPaths(dir?: string): string {
-  const fromEnv = process.env.PI_DESKTOP_HOME
-  dataDir = resolve(dir || fromEnv || join(homedir(), '.pidesktop'))
+  const fromEnv = process.env.METIS_HOME || process.env.PI_DESKTOP_HOME
+  dataDir = resolve(dir || fromEnv || join(homedir(), '.metis'))
   mkdirSync(dataDir, { recursive: true })
   return dataDir
 }
@@ -46,8 +46,11 @@ export const paths = {
 }
 
 /**
- * 早期版本把数据放在 Electron 的 userData（Windows 上是 %APPDATA%/pi-desktop）。
- * 换到 ~/.pidesktop 后，首次启动把配置、会话、日志搬过来，不动 Chromium 的缓存目录。
+ * 历史数据目录迁移：
+ * 1) Electron userData（Windows 上是 %APPDATA%/pi-desktop）——最早期版本；
+ * 2) ~/.pidesktop——"Pi Desktop" 时期的数据目录。
+ * 更名 Metis 后默认数据目录为 ~/.metis，首次启动把旧目录的配置、会话、日志、
+ * 记忆、技能、定时任务等搬过来，不动 Chromium 的缓存目录。目标已有配置时不覆盖。
  */
 export function migrateLegacyData(legacyRoot: string): number {
   const target = getDataDir()
@@ -60,11 +63,16 @@ export function migrateLegacyData(legacyRoot: string): number {
     'sessions',
     'logs',
     'attachments',
+    'projects',
     'plugins',
     'plugins.json',
     'MEMORY.md',
+    'USER.md',
+    'SOUL.md',
+    'skills',
     'memory-graph.json',
-    'memory-holo.json'
+    'memory-holo.json',
+    'schedules.json'
   ]
   let moved = 0
   for (const item of items) {

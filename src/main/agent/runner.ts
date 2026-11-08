@@ -492,12 +492,13 @@ export class AgentRunner {
             /** 子智能体自己的结果窗口，与父循环互不影响 */
             const subOutcomes: Outcome[] = []
             const subTools = toolSpecs({ forSubAgent: true, subagentType: type })
+            const allowedTools = new Set(subTools.map((tool) => tool.name))
             // 子智能体的系统提示词：主提示词 + 按类型的身份说明
             const typeBrief =
               type === 'explore'
-                ? 'You are a READ-ONLY exploration sub-agent: investigate and report findings. You do NOT have write/edit tools — do not attempt to modify anything.'
+                ? 'You are a READ-ONLY exploration sub-agent: investigate and report findings using read/repomind/fetch/ask. You have no shell or write tools; do not attempt to modify anything.'
                 : type === 'plan'
-                  ? 'You are a PLANNING sub-agent: produce a concrete, step-by-step implementation plan (files to touch, changes to make, how to verify). Do NOT modify anything — you have no write/edit tools.'
+                  ? 'You are a PLANNING sub-agent: produce a concrete, step-by-step implementation plan (files to touch, changes to make, how to verify). Investigate with read/repomind/fetch/ask. Do NOT modify anything; you have no shell or write tools.'
                   : 'Work autonomously with the tools you have.'
             const subSystem = `${system}\n\n## Sub-agent mode\nYou are a SUB-AGENT spawned by the main agent for one independent sub-task ("${label}"). ${typeBrief} When done, reply with a concise text summary of your findings or results — it is returned to the main agent as a tool result. You do NOT have the task tool and cannot spawn further sub-agents.`
 
@@ -583,6 +584,9 @@ export class AgentRunner {
                   workspace: cwd,
                   shell: cfg.shell,
                   signal: run.abort.signal,
+                  allowedTools,
+                  sessionId,
+                  callId: call.id,
                   log: (event, data) => this.log.info(event, data)
                   // 刻意不传 spawnSubAgent：子智能体不能再派生
                 })
@@ -797,7 +801,7 @@ export class AgentRunner {
         leftover: leftover.length
       })
 
-      if (leftover.length) {
+      if (leftover.length && !run.abort.signal.aborted) {
         const next: ActiveRun = {
           sessionId,
           abort: new AbortController(),

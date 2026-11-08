@@ -1,5 +1,5 @@
-import { existsSync, realpathSync } from 'node:fs'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { lstatSync, realpathSync } from 'node:fs'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 
 export class ToolError extends Error {
   constructor(message: string) {
@@ -12,43 +12,45 @@ function norm(p: string): string {
   return process.platform === 'win32' ? p.toLowerCase() : p
 }
 
-/** 根目录的真实路径；根不存在（理论上 runner 已懒创建）时原样返回并降级为字符串校验 */
-function realRoot(root: string): string {
-  try {
-    return realpathSync(resolve(root))
-  } catch {
-    return resolve(root)
+/** 新文件也要解析父目录中的链接；悬空链接或权限错误不能按普通缺失路径放行。 */
+function realPathWithMissingTail(abs: string): string {
+  let ancestor = abs
+  for (;;) {
+    try {
+      lstatSync(ancestor)
+      break
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(ancestor) === ancestor) throw err
+      ancestor = dirname(ancestor)
+    }
   }
+  return resolve(realpathSync(ancestor), relative(ancestor, abs))
 }
 
 /**
  * 把模型给的路径锚定在工作目录内。
  * 桌面端有真实文件系统权限，越界写文件是不可接受的，这里直接拒绝。
- * 两层校验：先按字符串 relative 拦 `../` 与绝对路径；再对已存在的目标做
- * realpath 解析——工作目录内指向外部的符号链接同样不允许越界。
+ * 两层校验：先按字符串 relative 拦越界路径；再解析目标或最近存在的父目录，
+ * 防止通过目录链接向工作目录之外新建文件。无法验证的链接拒绝访问。
  */
 export function resolveInside(root: string, p: string): string {
   if (typeof p !== 'string' || !p.trim()) throw new ToolError('path 不能为空')
   const abs = isAbsolute(p) ? resolve(p) : resolve(root, p)
   const rel = relative(resolve(root), abs)
-  if (rel === '') return abs
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new ToolError(`路径超出工作目录：${p}（当前工作目录 ${root}）`)
   }
-  if (existsSync(abs)) {
-    try {
-      const real = realpathSync(abs)
-      const realRel = relative(realRoot(root), real)
-      if (realRel === '..' || realRel.startsWith(`..${sep}`) || isAbsolute(realRel)) {
-        throw new ToolError(`路径经符号链接指向工作目录之外：${p}`)
-      }
-      return real
-    } catch (err) {
-      if (err instanceof ToolError) throw err
-      /* realpath 失败（竞态删除等）时按原路径继续，后续 fs 调用自然报错 */
+  try {
+    const real = realPathWithMissingTail(abs)
+    const realRel = relative(realPathWithMissingTail(resolve(root)), real)
+    if (realRel === '..' || realRel.startsWith(`..${sep}`) || isAbsolute(realRel)) {
+      throw new ToolError(`路径经符号链接指向工作目录之外：${p}`)
     }
+    return real
+  } catch (err) {
+    if (err instanceof ToolError) throw err
+    throw new ToolError(`无法校验文件真实路径：${p}（${(err as Error).message}）`)
   }
-  return abs
 }
 
 export function relPath(root: string, abs: string): string {

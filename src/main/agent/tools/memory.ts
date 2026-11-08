@@ -25,8 +25,8 @@ function clip(text: string, max: number): string {
 /**
  * memory：跨会话的持久记忆 + 记忆图谱 + 全息上下文 + 用户画像。
  *
- * 主存储是 ~/.pidesktop/MEMORY.md（人可读），图与全息元数据在旁边的 JSON 里；
- * scope=user 操作 ~/.pidesktop/USER.md（用户画像，全量注入每次请求）。
+ * 主存储是 ~/.metis/MEMORY.md（人可读），图与全息元数据在旁边的 JSON 里；
+ * scope=user 操作 ~/.metis/USER.md（用户画像，全量注入每次请求）。
  * 领域逻辑（读写/解析/检索/nudge）在 ../memory-store，与 prompt 注入共用。
  * 并行子任务不提供本工具（并发写会交错），记忆由主 agent 维护。
  */

@@ -75,20 +75,24 @@ function coverage(dist: number): number {
   return Math.max(0, Math.min(1, 0.5 - dist))
 }
 
-interface GlyphSpec {
-  x0: number
-  y0: number
-  x1: number
-  y1: number
+/** M 字形（16 网格坐标）：两条竖腿 + 中间 V，用胶囊（线段 SDF）绘制 */
+type GlyphSpec = { ax: number; ay: number; bx: number; by: number }
+
+function mGlyphs(k: number): GlyphSpec[] {
+  return [
+    { ax: 3.2 * k, ay: 13 * k, bx: 3.2 * k, by: 4.2 * k },
+    { ax: 3.2 * k, ay: 4.2 * k, bx: 8 * k, by: 10 * k },
+    { ax: 8 * k, ay: 10 * k, bx: 12.8 * k, by: 4.2 * k },
+    { ax: 12.8 * k, ay: 4.2 * k, bx: 12.8 * k, by: 13 * k }
+  ]
 }
 
-/** π 字形（16 网格坐标）：横杆 + 两条腿 */
-function piGlyphs(k: number): GlyphSpec[] {
-  return [
-    { x0: 2.6 * k, y0: 3.6 * k, x1: 13.4 * k, y1: 6.2 * k },
-    { x0: 4.1 * k, y0: 6.2 * k, x1: 6.6 * k, y1: 13 * k },
-    { x0: 9.4 * k, y0: 6.2 * k, x1: 11.9 * k, y1: 13 * k }
-  ]
+/** 胶囊 SDF：点到线段的距离减去半径由调用方处理 */
+function sdfSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const vx = bx - ax
+  const vy = by - ay
+  const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy)))
+  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy))
 }
 
 function drawTrayPng(size: number): Buffer {
@@ -96,7 +100,7 @@ function drawTrayPng(size: number): Buffer {
   const k = size / 16
   const bg = { top: [0x23, 0x23, 0x27], bottom: [0x0e, 0x0e, 0x11] }
   const fg = [0xf5, 0xf5, 0xf7]
-  const glyphs = piGlyphs(k)
+  const strokes = mGlyphs(k)
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -115,10 +119,10 @@ function drawTrayPng(size: number): Buffer {
       rgba[idx + 1] = Math.round(g)
       rgba[idx + 2] = Math.round(b)
       rgba[idx + 3] = Math.round(255 * bgCov)
-      // π 字形：白色覆盖在背景上（SDF 各部件取最小距离）
+      // M 字形：白色覆盖在背景上（各线段取最小距离，胶囊半径 0.8k）
       let glyphDist = Infinity
-      for (const s of glyphs) {
-        glyphDist = Math.min(glyphDist, sdfRoundRect(px, py, s.x0, s.y0, s.x1, s.y1, 0.6 * k))
+      for (const s of strokes) {
+        glyphDist = Math.min(glyphDist, sdfSegment(px, py, s.ax, s.ay, s.bx, s.by) - 0.8 * k)
       }
       const fgCov = coverage(glyphDist)
       if (fgCov > 0) {

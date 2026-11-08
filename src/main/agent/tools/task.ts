@@ -15,8 +15,8 @@ const TYPES: SubagentType[] = ['general', 'explore', 'plan']
  * 以一段文本汇报返回。子智能体没有 task 工具，不能再嵌套派生。
  *
  * 类型决定能力边界：
- * - general：全部工具（除 task），可改文件、跑命令
- * - explore：只读（read/bash），用于调研，物理上不能改文件
+ * - general：内置工具（除 task），可改文件、跑命令
+ * - explore：只读查询（read/repomind/fetch/ask），没有 shell 和写入工具
  * - plan：同 explore 的工具集，产出实施计划而不是执行
  */
 export const taskTool: AgentTool = {
@@ -26,8 +26,8 @@ export const taskTool: AgentTool = {
       'Spawn a sub-agent to complete an independent sub-task. ' +
       'The sub-agent has its own conversation history (it cannot see this conversation) ' +
       'and reports its findings as text when done. ' +
-      'Types: "general" has all tools (except task) and may modify files; ' +
-      '"explore" is read-only (read/bash) for code research — prefer it for investigations; ' +
+      'Types: "general" has built-in tools (except task) and may modify files or run shell commands; ' +
+      '"explore" uses read/repomind/fetch/ask for read-only research, without shell or write tools; ' +
       '"plan" is read-only and produces an implementation plan instead of executing. ' +
       'Use it for self-contained work that would otherwise flood the main thread with intermediate output. ' +
       'Multiple task calls in one turn run in parallel — when spawning several "general" sub-agents, make sure they do not write to the same files.',

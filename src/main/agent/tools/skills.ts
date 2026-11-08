@@ -5,7 +5,7 @@ import { asString, ToolError } from './util'
 
 /**
  * 技能（procedural memory）：模型从经验里自己沉淀的可复用过程，
- * 存 ~/.pidesktop/skills/<id>/SKILL.md（agentskills.io 风格的 frontmatter + 正文）。
+ * 存 ~/.metis/skills/<id>/SKILL.md（agentskills.io 风格的 frontmatter + 正文）。
  * system prompt 只注入一行索引（id — description），正文按需 read —— 技能多了也不烧 token。
  * 使用中发现技能有问题就 rewrite 改进它，这就是"技能在使用中自我改进"。
  */

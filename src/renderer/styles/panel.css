@@ -61,75 +61,97 @@
 }
 
 /* ------------------------------ 动作区 ------------------------------ */
-/* 「新标签页」起始页：品牌头 → 动作列表 → 产物区（同一列，顶流不居中） */
+/* 「新标签页」起始页：标题 → 动作卡片列表 → 产物区（同一列，顶流不居中） */
 
 .panel-menu-page {
   margin: 32px 0 0;
 }
 
-/* 品牌头：π 徽标 + 当前项目目录名，标明面板服务的是哪个项目 */
-.panel-brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 0 6px 13px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.panel-brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: var(--brand-grad);
-  color: #fff;
-  font-size: 12.5px;
+.menu-title {
+  margin: 0;
+  padding: 0 6px 14px;
+  font-size: 15px;
   font-weight: 700;
-  box-shadow: var(--brand-shadow);
-}
-
-.panel-brand-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-2);
+  color: var(--text);
 }
 
 .panel-actions {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border);
+  gap: 4px;
 }
 
-.panel-action {
+.panel-action-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 19px 18px;
-  border: 0;
-  border-bottom: 1px solid var(--border);
+  padding: 10px 8px;
+  border-radius: 10px;
   background: transparent;
-  font-size: 14px;
-  color: var(--text);
   cursor: pointer;
-  text-align: left;
   transition: background 0.1s;
 }
 
-.panel-action:hover {
-  background: var(--panel);
+.panel-action-card:hover {
+  background: var(--panel-soft);
 }
 
-.panel-action svg {
+.panel-action-card:focus-visible {
+  outline: 1px solid var(--border-strong);
+}
+
+.action-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--panel);
   color: var(--text-2);
+}
+
+.panel-action-card:hover .action-ico {
+  background: var(--bg);
+}
+
+.action-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.action-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.action-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-open {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text-2);
+  transition: background 0.1s, color 0.1s;
+}
+
+.panel-action-card:hover .action-open {
+  background: var(--bg);
+  color: var(--text);
 }
 
 /* 完整视图：起始页收成水平居中的窄列 + 顶部大留白 */
@@ -142,8 +164,8 @@
   margin: 150px auto 0;
 }
 
-.side-panel.panel-full .panel-action {
-  padding: 19px 6px;
+.side-panel.panel-full .panel-action-card {
+  padding: 12px 10px;
 }
 
 .side-panel.panel-full .panel-section {
@@ -1009,6 +1031,10 @@
   transform: rotate(90deg);
 }
 
+.tree-icon {
+  flex: none;
+}
+
 .tree-name {
   min-width: 0;
   overflow: hidden;
@@ -1129,28 +1155,6 @@
   justify-content: center;
   gap: 4px;
   background: var(--panel-soft);
-}
-
-.pane-blank-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  margin-bottom: 6px;
-  border-radius: 11px;
-  background: var(--brand-grad);
-  color: #fff;
-  font-size: 20px;
-  font-weight: 700;
-  box-shadow: var(--brand-shadow);
-}
-
-.pane-blank-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--text);
 }
 
 .pane-blank-hint {

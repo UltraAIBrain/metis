@@ -185,9 +185,9 @@ class TermHost {
     if (!existsSync(cwd)) throw new Error(`目录不存在：${cwd}`)
 
     const shellKind = isShellKind(rawKind) ? rawKind : resolveKind('auto')
-    const { args } = shellCommand(shellKind)
+    const { file, args } = shellCommand(shellKind)
     // 合成启动横幅（管道模式 shell 不打真实 banner）：一行版本 + 交给 shell 自己的提示符
-    // child 在下方按 shellKind 字面量分支启动，这里先占位、spawn 后立即回填
+    // child 在下方启动，这里先占位、spawn 后立即回填
     const proc: TermProc = {
       child: null as unknown as ChildProcess,
       buffer: `${shellBanner(shellKind)}\r\n`,
@@ -199,14 +199,7 @@ class TermHost {
     }
     this.procs.set(sessionId, proc)
 
-    const child =
-      shellKind === 'cmd'
-        ? spawn('cmd.exe', args, { cwd, windowsHide: true, env: shellSpawnEnv() })
-        : shellKind === 'bash'
-          ? spawn('bash.exe', args, { cwd, windowsHide: true, env: shellSpawnEnv() })
-          : shellKind === 'powershell'
-            ? spawn('powershell.exe', args, { cwd, windowsHide: true, env: shellSpawnEnv() })
-            : spawn(pwshPath() ?? 'powershell.exe', args, { cwd, windowsHide: true, env: shellSpawnEnv() })
+    const child = spawn(file, args, { cwd, windowsHide: true, env: shellSpawnEnv() })
 
     proc.child = child
 

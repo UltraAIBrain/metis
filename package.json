@@ -1,8 +1,8 @@
 {
-  "name": "pi-desktop",
+  "name": "metis-desktop",
   "version": "1.0.0",
   "private": true,
-  "description": "Pi Agent Desktop — 极简编码代理的桌面客户端",
+  "description": "Metis — 极简编码代理的桌面客户端",
   "main": "./out/main/index.js",
   "license": "MIT",
   "engines": {
@@ -21,7 +21,7 @@
     "dist:mac": "npm run build && electron-builder --mac dmg",
     "dist:linux": "npm run build && electron-builder --linux AppImage",
     "icon": "electron scripts/make-icon.cjs",
-    "pi": "node out/main/cli.js"
+    "metis": "node out/main/cli.js"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
@@ -38,6 +38,6 @@
     "vite": "^5.4.11"
   },
   "bin": {
-    "pi": "./out/main/cli.js"
+    "metis": "./out/main/cli.js"
   }
 }

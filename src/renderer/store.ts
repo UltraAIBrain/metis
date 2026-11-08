@@ -44,6 +44,13 @@ export interface Notice {
   text: string
 }
 
+export interface PendingQuestion {
+  sessionId: string
+  callId: string
+  question: string
+  options: string[]
+}
+
 export interface State {
   ready: boolean
   fatal: string | null
@@ -65,8 +72,8 @@ export interface State {
   panelOpen: boolean
   /** 功能面板完整视图：面板接管聊天区，顶部多选项卡切换 */
   panelFull: boolean
-  /** ask 工具等待回答的结构化提问（同一时刻至多一个） */
-  askDialog: { sessionId: string; callId: string; question: string; options: string[] } | null
+  /** 按到达顺序保留各会话的待回答提问，界面一次展示一条。 */
+  askQueue: PendingQuestion[]
 }
 
 /** 草稿会话 id：新建后未发消息时存在，不写磁盘、不进侧栏 */
@@ -126,7 +133,7 @@ class Store {
     plugins: [],
     panelOpen: localStorage.getItem('pi.panelOpen') !== '0',
     panelFull: false,
-    askDialog: null
+    askQueue: []
   }
 
   private listeners = new Set<() => void>()
@@ -415,11 +422,16 @@ class Store {
    * 发送消息；files 是渲染层持有的附件字节（选择框 / 粘贴 / 拖拽），
    * 真正的暂存放在这里：草稿会话先落盘拿到真实 id，附件才进对的目录。
    */
-  async send(text: string, files?: PickedFile[]): Promise<SendOutcome | null> {
+  async send(sessionId: string, text: string, files?: PickedFile[]): Promise<SendOutcome | null> {
     const trimmed = text.trim()
     if (!trimmed && !files?.length) return null
 
     let session = this.state.session
+    // @ 文件读取发生在提交之前；切换会话后不得把旧输入发给当前会话。
+    if (session?.id !== sessionId) {
+      this.notify('warn', '会话已切换，消息保留在原会话草稿中，请切回后重试。')
+      return { ok: false, sessionId }
+    }
     if (!session || this.sendingIds.has(session.id)) return null
 
     const locks = new Set<string>([session.id])
@@ -603,13 +615,18 @@ class Store {
   }
 
   /** 回答 ask 工具的结构化提问（choice=-1 表示自行输入） */
-  async answerAsk(callId: string, choice: number, text: string): Promise<void> {
-    this.set({ askDialog: null })
+  async answerAsk(sessionId: string, callId: string, choice: number, text: string): Promise<void> {
     try {
       await window.pi.answerAsk(callId, choice, text)
+      // false 表示该提问已经结束；同样移除它，但不影响刚到达的其他提问。
+      this.closeAsk(sessionId, callId)
     } catch (err) {
       this.notify('error', cleanIpcError(err))
     }
+  }
+
+  private closeAsk(sessionId: string, callId: string): void {
+    this.set({ askQueue: this.state.askQueue.filter((ask) => ask.sessionId !== sessionId || ask.callId !== callId) })
   }
 
   togglePanelFull(): void {
@@ -845,8 +862,13 @@ class Store {
         break
       }
       case 'ask_question': {
-        // 只保留最新一条（同一时刻模型只应问一个问题；旧问题随超时/中止自清）
-        this.set({ askDialog: { sessionId: e.sessionId, callId: e.callId, question: e.question, options: e.options } })
+        if (!s.askQueue.some((ask) => ask.sessionId === e.sessionId && ask.callId === e.callId)) {
+          this.set({ askQueue: [...s.askQueue, { sessionId: e.sessionId, callId: e.callId, question: e.question, options: e.options }] })
+        }
+        break
+      }
+      case 'ask_closed': {
+        this.closeAsk(e.sessionId, e.callId)
         break
       }
       case 'run_end': {
@@ -855,7 +877,8 @@ class Store {
         this.set({
           live: nextLive,
           runningIds: s.runningIds.filter((id) => id !== e.sessionId),
-          queue: { ...s.queue, [e.sessionId]: [] }
+          queue: { ...s.queue, [e.sessionId]: [] },
+          askQueue: s.askQueue.filter((ask) => ask.sessionId !== e.sessionId)
         })
         if (e.sessionId === s.session?.id) void this.reloadSession(e.sessionId)
         this.refreshSessions()
@@ -928,7 +951,7 @@ class Store {
       case 'about':
         this.notify(
           'info',
-          `Pi Desktop ${this.state.app?.appVersion ?? ''} · 数据目录 ${this.state.app?.dataDir ?? ''}`
+          `Metis ${this.state.app?.appVersion ?? ''} · 数据目录 ${this.state.app?.dataDir ?? ''}`
         )
         break
     }

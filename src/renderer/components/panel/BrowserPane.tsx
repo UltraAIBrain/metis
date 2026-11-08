@@ -30,9 +30,12 @@ export const BrowserPane = memo(function BrowserPane({ initialUrl, onOpenTab, on
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ref = useRef<any>(null)
   const [address, setAddress] = useState(() => (initialUrl?.trim() ? normalizeUrl(initialUrl) : HOME))
-  /** 是否已经离开空白首页（首页是渲染层的空态页，不加载 webview） */
-  const [navigated, setNavigated] = useState(() => Boolean(initialUrl?.trim()))
+  /** 仅提交地址时更新 src，编辑地址栏不会让 guest 跟着导航。 */
+  const [committedUrl, setCommittedUrl] = useState(address)
+  const navigated = Boolean(committedUrl)
   const [loading, setLoading] = useState(false)
+  /** 用户正在地址栏输入时不回填导航地址 */
+  const addressFocused = useRef(false)
   const navigateRef = useRef(onNavigate)
   navigateRef.current = onNavigate
   const openTabRef = useRef(onOpenTab)
@@ -42,7 +45,8 @@ export const BrowserPane = memo(function BrowserPane({ initialUrl, onOpenTab, on
     const wv = ref.current
     if (!wv) return
     const onNavigateEvent = (e: { url: string }): void => {
-      setAddress(e.url)
+      // 用户正在地址栏输入时不回填，避免页面加载覆盖正在打的字
+      if (!addressFocused.current) setAddress(e.url)
       navigateRef.current?.(e.url)
     }
     const onStart = (): void => setLoading(true)
@@ -71,8 +75,8 @@ export const BrowserPane = memo(function BrowserPane({ initialUrl, onOpenTab, on
     const url = normalizeUrl(address)
     if (!url) return
     setAddress(url)
-    setNavigated(true)
-    ref.current?.loadURL(url)
+    if (url === committedUrl) ref.current?.loadURL(url)
+    else setCommittedUrl(url)
   }
 
   return (
@@ -93,7 +97,8 @@ export const BrowserPane = memo(function BrowserPane({ initialUrl, onOpenTab, on
           title="空白首页"
           onClick={() => {
             setAddress(HOME)
-            setNavigated(false)
+            setCommittedUrl(HOME)
+            setLoading(false)
             navigateRef.current?.('')
           }}
         >
@@ -105,9 +110,11 @@ export const BrowserPane = memo(function BrowserPane({ initialUrl, onOpenTab, on
           value={address}
           spellCheck={false}
           placeholder="输入网址或搜索词"
+          onFocus={() => (addressFocused.current = true)}
+          onBlur={() => (addressFocused.current = false)}
           onChange={(e) => setAddress(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
               e.preventDefault()
               ;(e.target as HTMLInputElement).blur()
               go()
@@ -121,11 +128,9 @@ export const BrowserPane = memo(function BrowserPane({ initialUrl, onOpenTab, on
           /* allowpopups：让 window.open 走到主进程的 setWindowOpenHandler（在那里转成新选项卡并 deny）。
               Electron 要求该 attribute 在元素 attach 前就位；React 18 对自定义元素 boolean 不落 DOM、
               ref 回调又晚于 attach——所以用字符串值 + 类型断言（运行时确实按 attribute 渲染） */
-          <webview ref={ref} src={address} allowpopups={'true' as unknown as boolean} />
+          <webview ref={ref} src={committedUrl} allowpopups={'true' as unknown as boolean} />
         ) : (
           <div className="pane-blank">
-            <div className="pane-blank-mark">π</div>
-            <p className="pane-blank-title">空白首页</p>
             <p className="pane-blank-hint">在上方输入网址或搜索词开始浏览</p>
           </div>
         )}

@@ -9,8 +9,9 @@ if (process.env.ELECTRON_RUN_AS_NODE) {
   return
 }
 
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, ipcMain } = require('electron')
 const { mkdtempSync, writeFileSync, mkdirSync } = require('node:fs')
+const { createServer } = require('node:http')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 
@@ -90,13 +91,18 @@ function seedMarkdownSession() {
         leafId: 'a1',
         entryCount: 2,
         profileId: undefined,
-        model: undefined
+        model: 'smoke-model'
       },
       null,
       2
     ),
     'utf8'
   )
+  writeFileSync(join(home, 'sessions', 's_otherfixture.jsonl'), '', 'utf8')
+  writeFileSync(join(home, 'sessions', 's_otherfixture.meta.json'), JSON.stringify({
+    id: 's_otherfixture', title: '另一回归会话', cwd: '', createdAt: now - 8000,
+    updatedAt: now - 7000, leafId: null, entryCount: 0, model: 'smoke-model'
+  }), 'utf8')
 }
 
 const rendererErrors = []
@@ -149,6 +155,145 @@ function check(condition, message) {
   if (!condition) throw new Error(message)
 }
 
+/** Test-only IPC fixtures exercise the built renderer without exposing production internals. */
+async function rendererRegressions(win) {
+  const evaluate = (source) => win.webContents.executeJavaScript(source)
+  const click = async (selector, text) => {
+    await evaluate(`(() => {
+      const node = [...document.querySelectorAll(${JSON.stringify(selector)})]
+        .find(el => ${text === undefined ? 'true' : `el.textContent.includes(${JSON.stringify(text)})`})
+      if (!node) throw new Error('Missing test element: ' + ${JSON.stringify(selector)})
+      node.click()
+    })()`)
+  }
+  const input = async (selector, value) => {
+    await evaluate(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)})
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+  }
+  const visible = (selector, text) => waitFor(() => evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)})
+    return Boolean(el && el.textContent.includes(${JSON.stringify(text)}))
+  })()`), `${selector}: ${text}`)
+  const selectSession = async (title) => {
+    await click('.session-row', title)
+    await visible('.topbar-title', title)
+  }
+  const replace = (channel, handler) => {
+    ipcMain.removeHandler(channel)
+    ipcMain.handle(channel, handler)
+  }
+
+  // A delayed @ reference must never send A's text or attachment to session B.
+  let releaseRead
+  let readStarted = false
+  const sent = []
+  replace('fs:search', () => [])
+  replace('fs:read', async () => {
+    readStarted = true
+    return new Promise((resolve) => { releaseRead = resolve })
+  })
+  replace('chat:send', (_event, id, text) => { sent.push({ id, text }); return { queued: false } })
+  await input('.composer textarea', '读取 @fixture.txt')
+  await click('.btn-send')
+  await waitFor(() => readStarted, '@ reference read started')
+  await selectSession('另一回归会话')
+  releaseRead({ name: 'fixture.txt', text: 'private to A' })
+  await visible('.toast', '会话已切换')
+  check(sent.length === 0, 'message was sent to a different session during @ reference resolution')
+  await selectSession('渲染自检会话')
+  await waitFor(() => evaluate("document.querySelector('.composer textarea').value === '读取 @fixture.txt'"), 'original draft retained')
+
+  // Concurrent questions queue; cancellation removes only its own question and resets answer draft.
+  const emit = (event) => win.webContents.send('agent:event', event)
+  emit({ type: 'ask_question', sessionId: 's_mdfixture', callId: 'q-one', question: '第一条问题', options: ['甲', '乙'] })
+  emit({ type: 'ask_question', sessionId: 's_otherfixture', callId: 'q-two', question: '第二条问题', options: ['丙', '丁'] })
+  await visible('.ask-question', '第一条问题')
+  await click('.ask-other-btn')
+  await input('.ask-other-row input', '第一问草稿')
+  emit({ type: 'ask_closed', sessionId: 's_mdfixture', callId: 'q-one' })
+  await visible('.ask-question', '第二条问题')
+  check(await evaluate("!document.querySelector('.ask-other-row input')"), 'answer draft leaked into next question')
+  emit({ type: 'run_end', sessionId: 's_otherfixture', status: 'aborted', at: Date.now() })
+  await waitFor(() => evaluate("!document.querySelector('.ask-dialog')"), 'ended run question removed')
+
+  // A late answer response must not close a newer question.
+  let releaseAnswer
+  replace('ask:answer', () => new Promise((resolve) => { releaseAnswer = resolve }))
+  emit({ type: 'ask_question', sessionId: 's_mdfixture', callId: 'q-three', question: '第三条问题', options: ['甲', '乙'] })
+  await visible('.ask-question', '第三条问题')
+  await click('.ask-option')
+  await waitFor(() => releaseAnswer, 'answer submitted')
+  emit({ type: 'ask_closed', sessionId: 's_mdfixture', callId: 'q-three' })
+  emit({ type: 'ask_question', sessionId: 's_otherfixture', callId: 'q-four', question: '第四条问题', options: ['丙', '丁'] })
+  await visible('.ask-question', '第四条问题')
+  releaseAnswer(true)
+  await delay(80)
+  await visible('.ask-question', '第四条问题')
+  emit({ type: 'ask_closed', sessionId: 's_otherfixture', callId: 'q-four' })
+  await waitFor(() => evaluate("!document.querySelector('.ask-dialog')"), 'last question removed')
+
+  // Resolve file B before A and ensure the selected file retains B's diff.
+  const diffs = new Map()
+  let releaseDirectory
+  replace('fs:list', (_event, _id, rel) => rel
+    ? new Promise((resolve) => { releaseDirectory = resolve })
+    : [{ name: 'A.txt', kind: 'file', size: 1 }, { name: 'B.txt', kind: 'file', size: 1 }, { name: 'slow', kind: 'dir', size: 0 }])
+  replace('workspace:diff', (_event, _id, file) => new Promise((resolve) => { diffs.set(file, resolve) }))
+  await click('.panel-action-card', '查看工作空间')
+  await visible('.pane-tree', 'A.txt')
+  await click('.tree-row', 'A.txt')
+  await waitFor(() => diffs.has('A.txt'), 'A diff requested')
+  await click('.tree-row', 'B.txt')
+  await waitFor(() => diffs.has('B.txt'), 'B diff requested')
+  diffs.get('B.txt')('@@ -1 +1 @@\n-old\n+B-result')
+  await visible('.pane-file', 'B-result')
+  diffs.get('A.txt')('@@ -1 +1 @@\n-old\n+A-result')
+  await delay(80)
+  check(await evaluate("document.querySelector('.pane-file').textContent.includes('B-result') && !document.querySelector('.pane-file').textContent.includes('A-result')"), 'late A diff replaced B diff')
+  await click('.tree-row', 'slow')
+  await waitFor(() => releaseDirectory, 'slow directory requested')
+  await selectSession('另一回归会话')
+  await click('.panel-action-card', '查看工作空间')
+  await visible('.pane-tree', 'A.txt')
+  releaseDirectory([{ name: 'stale-child.txt', kind: 'file', size: 1 }])
+  await delay(80)
+  check(await evaluate("!document.querySelector('.pane-tree').textContent.includes('stale-child.txt')"), 'old directory leaked into another session')
+
+  // A loopback page makes real guest navigations observable without external network access.
+  const requests = []
+  const server = createServer((req, res) => {
+    requests.push(req.url)
+    res.writeHead(200, { 'Content-Type': 'text/html' })
+    res.end('<!doctype html><title>Browser regression</title><p>Local test page</p>')
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`
+    await click('.panel-tab-add')
+    await click('.panel-action-card', '打开浏览器')
+    await input('.pane-url', `${base}/one`)
+    const enterAddress = () => evaluate("document.querySelector('.pane-url').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))")
+    await enterAddress()
+    await waitFor(() => requests.includes('/one'), 'initial browser navigation')
+    await waitFor(() => evaluate(`document.querySelector('webview')?.getURL() === ${JSON.stringify(`${base}/one`)}`), 'initial guest URL')
+    await input('.pane-url', `${base}/two`)
+    await delay(150)
+    check(!requests.includes('/two'), 'editing address navigated the guest before Enter')
+    check(await evaluate(`document.querySelector('webview').getURL() === ${JSON.stringify(`${base}/one`)}`), 'guest URL changed before Enter')
+    await enterAddress()
+    await waitFor(() => requests.includes('/two'), 'committed browser navigation')
+    check(requests.filter((url) => url === '/two').length === 1, 'committed address navigated twice')
+  } finally {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  }
+  console.log('Renderer regressions passed · @ reference session switch + ask lifecycle + file request races + browser address commit')
+}
+
 async function run() {
   await app.whenReady()
   seedMarkdownSession()
@@ -181,7 +326,7 @@ async function run() {
   check(result.dataDir === home, `unexpected data directory: ${result.dataDir}`)
   check(/^s_[a-z0-9]+$/i.test(result.createdId), `invalid created session id: ${result.createdId}`)
   check(result.listed, 'created session was not returned by session:list')
-  check(result.title === 'Pi Desktop', `unexpected document title: ${result.title}`)
+  check(result.title === 'Metis', `unexpected document title: ${result.title}`)
   check(rendererErrors.length === 0, `renderer errors: ${rendererErrors.join(' | ')}`)
 
   /* ---- UI 断言：右键菜单 + Markdown 渲染（点开夹具会话） ---- */
@@ -244,6 +389,9 @@ async function run() {
   check(ui.del === 1, `markdown del count: ${ui.del}`)
   check(ui.link === 1, `markdown link count: ${ui.link}`)
   check(ui.snakeIntact, 'snake_case_name was mangled by italic parsing')
+
+  await rendererRegressions(win)
+  check(rendererErrors.length === 0, `renderer errors: ${rendererErrors.join(' | ')}`)
 
   finished = true
   console.log(`Electron smoke passed · window + sandbox + preload + IPC + context menu + markdown · ${home}`)

@@ -166,6 +166,7 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
         let memoryMark = false
         let memRewriteMark = false
         let exploreMark = false
+        let subReadOnly = false
         /** 历史里是否已经调过 memory 工具（rewrite 只做一次，否则就是无限循环） */
         let memoryCalled = false
         try {
@@ -205,6 +206,7 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
           if (Array.isArray(tools)) {
             const names = tools.map((t) => t.function?.name ?? '').join(',')
             if (hasSubtaskMark) seenSubToolNamesLast = names
+            subReadOnly = hasSubtaskMark && !names.split(',').includes('bash')
           }
           // 子请求历史里 tool 消息的最大 content 长度（验证子循环上下文不被落盘截断影响）
           if (hasSubtaskMark) {
@@ -389,7 +391,7 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
         }
 
         // 子智能体分支：子任务的 user 消息带 SUBTASK-SMOKE 标记，mock 直接"执行"并汇报。
-        // 同时证明子智能体的工具循环真的在跑：它会真的调一次 bash。
+        // 同时证明工具循环真的在跑：普通子任务调 bash，只读子任务调 repomind。
         if (hasSubtaskMark && !hasSpawnMark) {
           if (assistantTurns === 0) {
             // 第一轮：调 bash 验证子智能体工具可用；带 BIG 标记时命令产生 >8KB 输出（验证落盘截断）
@@ -406,7 +408,9 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
                         index: 0,
                         id: bigOut ? 'call_big_1' : 'call_sub_1',
                         type: 'function',
-                        function: { name: 'bash', arguments: JSON.stringify({ command: bigOut ? bigCmd : 'echo sub-agent-ok' }) }
+                        function: subReadOnly
+                          ? { name: 'repomind', arguments: JSON.stringify({ action: 'stats' }) }
+                          : { name: 'bash', arguments: JSON.stringify({ command: bigOut ? bigCmd : 'echo sub-agent-ok' }) }
                       }
                     ]
                   }
@@ -417,7 +421,7 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
             send({ choices: [], usage: { prompt_tokens: 90, completion_tokens: 15 } })
           } else {
             // 第二轮：拿到 bash 结果后汇报
-            send({ choices: [{ index: 0, delta: { content: '子任务完成：bash 输出 sub-agent-ok。' } }] })
+            send({ choices: [{ index: 0, delta: { content: subReadOnly ? '只读子任务完成：已查看仓库结构。' : '子任务完成：bash 输出 sub-agent-ok。' } }] })
             send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
             send({ choices: [], usage: { prompt_tokens: 150, completion_tokens: 30 } })
           }
@@ -1621,11 +1625,12 @@ async function main(): Promise<void> {
   check(
     'explore 子智能体没有写类工具',
     seenSubToolNamesLast.includes('read') &&
-      seenSubToolNamesLast.includes('bash') &&
+      !seenSubToolNamesLast.includes('bash') &&
       !seenSubToolNamesLast.includes('write') &&
       !seenSubToolNamesLast.includes('edit') &&
       !seenSubToolNamesLast.includes('task') &&
-      !seenSubToolNamesLast.includes('memory'),
+      !seenSubToolNamesLast.includes('memory') &&
+      !seenSubToolNamesLast.includes('skills'),
     seenSubToolNamesLast
   )
   const expResult = sessions
@@ -1638,6 +1643,7 @@ async function main(): Promise<void> {
   check('子过程落盘到独立文件', existsSync(subFile), subFile)
   const expTraj = buildTrajectory(sessions, expSession.id)
   const expRun = expTraj.subProcesses?.['call_exp_1']
+  check('explore 正常执行只读仓库查询', Boolean(expRun?.messages.some((m) => m.role === 'tool' && m.name === 'repomind' && !m.isError)))
   check(
     '轨迹 JSON 关联子过程',
     Boolean(expRun && expRun.type === 'explore' && expRun.messages.length >= 3 && expRun.usage.output === 45),
@@ -1669,9 +1675,11 @@ async function main(): Promise<void> {
 
   console.log('\n[25] repomind 仓库图谱')
   const { repomindTool } = await import('../src/main/agent/tools/repomind')
-  const rmCtx = { workspace, shell: 'auto' as const, signal: new AbortController().signal, log: () => {} }
-  writeFileSync(join(workspace, 'graph_base.ts'), 'export function sharedFn(): number {\n  return 1\n}\n', 'utf8')
-  writeFileSync(join(workspace, 'graph_user.ts'), 'import { sharedFn } from "./graph_base"\nexport const useIt = () => sharedFn()\n', 'utf8')
+  const graphWorkspace = join(workspace, 'graph-fixture')
+  mkdirSync(graphWorkspace)
+  const rmCtx = { workspace: graphWorkspace, shell: 'auto' as const, signal: new AbortController().signal, log: () => {} }
+  writeFileSync(join(graphWorkspace, 'graph_base.ts'), 'export function sharedFn(): number {\n  return 1\n}\n', 'utf8')
+  writeFileSync(join(graphWorkspace, 'graph_user.ts'), 'import { sharedFn } from "./graph_base"\nexport const useIt = () => sharedFn()\n', 'utf8')
 
   const rmStats = await repomindTool.run({ action: 'stats' }, rmCtx)
   check('repomind stats 含文件与依赖', !rmStats.isError && rmStats.content.includes('graph_base.ts'), rmStats.content.slice(0, 200))
@@ -2221,7 +2229,7 @@ async function main(): Promise<void> {
     const askPromise = askTool.run({ question: '选哪个方案？', options: ['方案 A', '方案 B'] }, { ...ctx33, callId: 'ask_1' })
     await new Promise((r) => setTimeout(r, 50))
     check('ask 事件已投递', delivered.length === 1 && delivered[0].options.length === 2, JSON.stringify(delivered))
-    check('ask 回填命中', answerAsk('ask_1', 0, '方案 A') === true)
+    check('ask 回填命中', answerAsk(delivered[0].callId, 0, '方案 A') === true)
     const askRes = await askPromise
     check('ask 结果带用户选择', !askRes.isError && askRes.content.includes('方案 A'), askRes.content)
 
@@ -2274,6 +2282,14 @@ async function main(): Promise<void> {
   check('日志包含工具记录', logText.includes('tool.bash') || logText.includes('tool.write'))
 
   await mock.close()
+
+  console.log('\n[34] 边界与并发回归')
+  const { runBoundaryRegressions } = await import('./boundary-regressions')
+  await runBoundaryRegressions(home)
+  const { runSystemRegressions } = await import('./system-regressions')
+  runSystemRegressions()
+  const { runAgentRegressions } = await import('./agent-regressions')
+  await runAgentRegressions()
 
   console.log(`\n${failures === 0 ? '全部通过' : `${failures} 项失败`}  ·  运行目录 ${home}\n`)
   process.exit(failures === 0 ? 0 : 1)

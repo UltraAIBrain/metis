@@ -394,7 +394,7 @@ class PluginHost {
     const target = parseGitHubUrl(rawUrl)
     const zipBuffer = await downloadRepoZip(target)
 
-    const tmp = mkdtempSync(join(tmpdir(), 'pidesktop-gh-'))
+    const tmp = mkdtempSync(join(tmpdir(), 'metis-gh-'))
     try {
       writeEntries(tmp, await unzip(zipBuffer), target.subpath)
 

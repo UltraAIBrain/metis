@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react'
 import type { DirEntry, SessionView } from '@shared/types'
 import { store } from '../../store'
 import { baseName } from '../../util'
+import { RowIcon } from '../../file-icons'
 import { DiffView } from '../DiffView'
 
 /**
@@ -26,9 +27,13 @@ export const FilesPane = memo(function FilesPane({ session }: { session: Session
   const [selected, setSelected] = useState<string | null>(null)
   const [diff, setDiff] = useState<{ text: string; loading: boolean }>({ text: '', loading: false })
   const reqRef = useRef(0)
+  const diffRequest = useRef(0)
+  const sessionRef = useRef(sessionId)
+  sessionRef.current = sessionId
 
   useEffect(() => {
     const id = ++reqRef.current
+    diffRequest.current++
     setDirs({ '': 'loading' })
     setExpanded(new Set(['']))
     setSelected(null)
@@ -37,16 +42,18 @@ export const FilesPane = memo(function FilesPane({ session }: { session: Session
     store
       .fetchDir(sessionId, '')
       .then((list) => {
-        if (cancelled || reqRef.current !== id) return
+        if (cancelled || reqRef.current !== id || sessionRef.current !== sessionId) return
         setDirs({ '': list })
       })
       .catch((err) => {
-        if (cancelled || reqRef.current !== id) return
+        if (cancelled || reqRef.current !== id || sessionRef.current !== sessionId) return
         setDirs({ '': 'error' })
         store.notify('error', `读取目录失败：${(err as Error).message}`)
       })
     return () => {
       cancelled = true
+      reqRef.current++
+      diffRequest.current++
     }
   }, [sessionId])
 
@@ -58,17 +65,23 @@ export const FilesPane = memo(function FilesPane({ session }: { session: Session
       return next
     })
     if (dirs[rel]) return
+    const request = reqRef.current
     setDirs((d) => ({ ...d, [rel]: 'loading' }))
     store
       .fetchDir(sessionId, rel)
-      .then((list) => setDirs((d) => ({ ...d, [rel]: list })))
+      .then((list) => {
+        if (request !== reqRef.current || sessionRef.current !== sessionId) return
+        setDirs((d) => ({ ...d, [rel]: list }))
+      })
       .catch((err) => {
+        if (request !== reqRef.current || sessionRef.current !== sessionId) return
         setDirs((d) => ({ ...d, [rel]: 'error' }))
         store.notify('error', `读取目录失败：${(err as Error).message}`)
       })
   }
 
   const selectFile = async (rel: string): Promise<void> => {
+    const request = ++diffRequest.current
     if (selected === rel) {
       setSelected(null)
       setDiff({ text: '', loading: false })
@@ -78,8 +91,10 @@ export const FilesPane = memo(function FilesPane({ session }: { session: Session
     setDiff({ text: '', loading: true })
     try {
       const text = await store.fetchDiff(sessionId, rel)
+      if (request !== diffRequest.current || sessionRef.current !== sessionId) return
       setDiff({ text, loading: false })
     } catch {
+      if (request !== diffRequest.current || sessionRef.current !== sessionId) return
       setDiff({ text: '', loading: false })
       store.notify('error', '读取差异失败')
     }
@@ -116,6 +131,7 @@ export const FilesPane = memo(function FilesPane({ session }: { session: Session
           <div key={rel}>
             <button className="tree-row" type="button" style={{ paddingLeft: 10 + depth * 14 }} onClick={() => toggleDir(rel)}>
               <span className={`chev ${open ? 'open' : ''}`}>▸</span>
+              <RowIcon name={e.name} isDir open={open} />
               <span className="tree-name">{e.name}</span>
             </button>
             {open && renderRows(rel, depth + 1)}
@@ -131,6 +147,7 @@ export const FilesPane = memo(function FilesPane({ session }: { session: Session
           style={{ paddingLeft: 10 + depth * 14 + 14 }}
           onClick={() => void selectFile(rel)}
         >
+          <RowIcon name={e.name} isDir={false} />
           <span className="tree-name">{e.name}</span>
           <span className="tree-size">{formatSize(e.size)}</span>
         </button>

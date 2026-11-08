@@ -56,7 +56,7 @@ export const MessageItem = memo(function MessageItem({
   return (
     <div className={`msg msg-assistant ${message.stopReason === 'error' ? 'failed' : ''}`}>
       <div className="msg-head">
-        <span className="avatar">π</span>
+        <span className="avatar">M</span>
         <span className="msg-model">{message.model}</span>
         {message.stopReason === 'aborted' && <span className="tag">已中止</span>}
         {message.stopReason === 'error' && <span className="tag err">出错</span>}

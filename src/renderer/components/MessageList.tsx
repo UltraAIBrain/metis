@@ -17,7 +17,7 @@ function LiveBubble({ live }: { live: LiveState }): JSX.Element {
   return (
     <div className="msg msg-assistant streaming">
       <div className="msg-head">
-        <span className="avatar">π</span>
+        <span className="avatar">M</span>
         <span className="msg-model">生成中</span>
         <span className="typing">
           <i />
@@ -55,8 +55,8 @@ function LiveBubble({ live }: { live: LiveState }): JSX.Element {
 function EmptyState({ draft }: { draft?: boolean }): JSX.Element {
   return (
     <div className="empty-state">
-      <div className="empty-state-mark">π</div>
-      <h2>pi desktop</h2>
+      <div className="empty-state-mark">M</div>
+      <h2>Metis</h2>
       <p>一个只管干活的极简编码代理：读文件、改代码、跑命令。</p>
       <ul>
         <li>
@@ -127,7 +127,7 @@ export const MessageList = memo(function MessageList({ session, running, onFork,
         {running && !live ? (
           <div className="msg msg-assistant">
             <div className="msg-head">
-              <span className="avatar">π</span>
+              <span className="avatar">M</span>
               <span className="msg-model">继续处理中</span>
               <span className="typing">
                 <i />

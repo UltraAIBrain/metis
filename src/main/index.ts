@@ -1,4 +1,6 @@
 import { BrowserWindow, Menu, Tray, app, shell } from 'electron'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '@shared/ipc'
 import { context } from './context'
@@ -24,7 +26,7 @@ const getWindow = (): BrowserWindow | null => (mainWindow && !mainWindow.isDestr
 function createTray(): void {
   const image = createTrayImage()
   tray = new Tray(image)
-  tray.setToolTip('Pi Desktop')
+  tray.setToolTip('Metis')
   tray.on('click', () => {
     const win = getWindow()
     if (!win) return
@@ -44,7 +46,7 @@ function createTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
-        label: '打开 Pi Desktop',
+        label: '打开 Metis',
         click: () => {
           const win = getWindow()
           if (!win) return
@@ -76,7 +78,7 @@ function createWindow(): void {
     minHeight: 620,
     show: false,
     backgroundColor: '#ffffff',
-    title: 'Pi Desktop',
+    title: 'Metis',
     // 打包后图标由 exe 自带；开发模式下显式指定，任务栏才不是 Electron 默认图标
     icon: app.isPackaged ? undefined : join(app.getAppPath(), 'build', 'icon.png'),
     webPreferences: {
@@ -139,13 +141,20 @@ function createWindow(): void {
 }
 
 function bootstrap(): void {
-  // 数据放在 ~/.pidesktop；旧版放在 Electron userData，首次启动搬一次
+  // 数据放在 ~/.metis；历史目录（~/.pidesktop → Electron userData）首次启动依次搬一次。
+  // 测试用 PI_DESKTOP_HOME/METIS_HOME 指到临时目录时跳过迁移，避免把真实数据搬进沙箱。
   const dataRoot = initPaths()
-  // 迁移日志放在这里记：logger 依赖 paths，paths 里不适合再反过来 import logger
-  const migrated = migrateLegacyData(app.getPath('userData'))
-  if (migrated) logger.info('paths.migrated', { items: migrated, from: app.getPath('userData') })
+  const legacyPidesktop = process.env.PI_DESKTOP_HOME ? null : join(homedir(), '.pidesktop')
+  const migrated =
+    (legacyPidesktop ? migrateLegacyData(legacyPidesktop) : 0) + migrateLegacyData(app.getPath('userData'))
+  if (migrated) {
+    logger.info('paths.migrated', {
+      items: migrated,
+      from: legacyPidesktop && existsSync(join(dataRoot, 'config.json')) ? legacyPidesktop : app.getPath('userData')
+    })
+  }
 
-  if (process.platform === 'win32') app.setAppUserModelId('dev.pidesktop.app')
+  if (process.platform === 'win32') app.setAppUserModelId('dev.metis.app')
 
   const ctx = context()
   registerIpc(getWindow)
@@ -160,7 +169,7 @@ function bootstrap(): void {
       try {
         tray.displayBalloon({
           iconType: 'info',
-          title: 'Pi Desktop',
+          title: 'Metis',
           content: `后台任务${tail}，点击托盘图标回到窗口`
         })
       } catch {

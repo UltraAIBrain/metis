@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { AgentTool, ToolContext, ToolResult } from './types'
 import { asString, ToolError } from './util'
 
@@ -13,7 +14,6 @@ const MAX_OPTIONS = 4
 interface PendingAsk {
   resolve: (answer: string) => void
   reject: (err: Error) => void
-  cleanup: () => void
 }
 
 /** callId → 等待中的提问；渲染层经 IPC ask:answer 回填 */
@@ -23,8 +23,6 @@ const pending = new Map<string, PendingAsk>()
 export function answerAsk(callId: string, choice: number, text: string): boolean {
   const p = pending.get(callId)
   if (!p) return false
-  pending.delete(callId)
-  p.cleanup()
   const trimmed = text.trim()
   if (choice >= 0) p.resolve(`用户选择了：${trimmed}`)
   else p.resolve(trimmed ? `用户补充输入：${trimmed}` : '用户没有给出有效回答。')
@@ -33,9 +31,14 @@ export function answerAsk(callId: string, choice: number, text: string): boolean
 
 /** 渲染层登记提问投递器（ipc.ts 注册时绑定，把事件发到窗口） */
 let deliver: ((payload: { sessionId: string; callId: string; question: string; options: string[] }) => void) | null = null
+let deliverClosed: ((payload: { sessionId: string; callId: string }) => void) | null = null
 
 export function bindAskDelivery(fn: typeof deliver): void {
   deliver = fn
+}
+
+export function bindAskCloseDelivery(fn: typeof deliverClosed): void {
+  deliverClosed = fn
 }
 
 export const askTool: AgentTool = {
@@ -72,18 +75,25 @@ export const askTool: AgentTool = {
     if (options.length < 2) throw new ToolError('至少给出 2 个候选选项')
 
     if (!deliver) throw new ToolError('提问通道不可用（界面未就绪）')
-    if (pending.has(ctx.callId ?? '')) throw new ToolError('上一次提问还没有被回答')
+    if (ctx.signal.aborted) throw new ToolError('用户中止了任务，提问已取消')
 
-    const callId = ctx.callId ?? `ask_${Date.now().toString(36)}`
+    // UI 请求独立编号；不同会话的模型可能返回相同的工具 callId。
+    const callId = `ask_${randomUUID()}`
+    const sessionId = ctx.sessionId ?? ''
     const promise = new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
-        cleanup()
-        pending.delete(callId)
-        reject(new ToolError('提问超时未回答（10 分钟）'))
+        pending.get(callId)?.reject(new ToolError('提问超时未回答（10 分钟）'))
       }, TIMEOUT_MS)
-      const cleanup = (): void => {
+      const cleanup = (): boolean => {
+        if (!pending.delete(callId)) return false
         clearTimeout(timer)
         ctx.signal.removeEventListener('abort', onAbort)
+        try {
+          deliverClosed?.({ sessionId, callId })
+        } catch (err) {
+          ctx.log('tool.ask_close_failed', { callId, message: String(err) })
+        }
+        return true
       }
       const onAbort = (): void => {
         // 走 pending 里的包装 reject：同时清 timer、摘掉挂起项（否则中止后泄漏到超时才回收）
@@ -91,21 +101,20 @@ export const askTool: AgentTool = {
       }
       pending.set(callId, {
         resolve: (answer) => {
-          cleanup()
-          pending.delete(callId)
-          resolve(answer)
+          if (cleanup()) resolve(answer)
         },
         reject: (err) => {
-          cleanup()
-          pending.delete(callId)
-          reject(err)
-        },
-        cleanup
+          if (cleanup()) reject(err)
+        }
       })
       ctx.signal.addEventListener('abort', onAbort, { once: true })
     })
 
-    deliver({ sessionId: ctx.sessionId ?? '', callId, question, options })
+    try {
+      deliver({ sessionId, callId, question, options })
+    } catch (err) {
+      pending.get(callId)?.reject(err instanceof Error ? err : new Error(String(err)))
+    }
     ctx.log('tool.ask', { callId, options: options.length })
     const answer = await promise
     return { content: answer, isError: false }

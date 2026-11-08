@@ -404,7 +404,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2)
   if (args.includes('--help') || args.includes('-h')) {
     write(
-      'pi 终端版 — 纯 Node REPL 编码代理\n\n' +
+      'Metis 终端版 — 纯 Node REPL 编码代理\n\n' +
         '用法: pi [--new] [--session <id>] [--dir <目录>] [--home <数据目录>]\n\n' +
         HELP +
         '\n'
@@ -458,7 +458,7 @@ async function main(): Promise<void> {
   config.setLastSession(sessionId)
 
   const view = currentView()
-  write(`${c.bold('pi')} 终端版 ${c.dim(`· ${view.model} · 思考 ${view.thinking}`)}\n`)
+  write(`${c.bold('metis')} 终端版 ${c.dim(`· ${view.model} · 思考 ${view.thinking}`)}\n`)
   write(`${c.dim(`会话：${sessions.view(sessionId).title || sessionId} · /help 查看命令`)}\n\n`)
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: c.cyan('› ') })

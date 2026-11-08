@@ -28,7 +28,7 @@ export function GeneralTab(): JSX.Element {
                 ? '会话已开始，目录已锁定。需要换目录请新建项目。'
                 : session.cwd
                   ? '读写类工具被限制在这个目录内；bash 命令不受此限制。会话开始后不可更改。'
-                  : '还没指定目录。发送第一条消息时会在 ~/.pidesktop/projects 下自动建一个，也可以现在指定。'}
+                  : '还没指定目录。发送第一条消息时会在 ~/.metis/projects 下自动建一个，也可以现在指定。'}
             </p>
           </>
         ) : (

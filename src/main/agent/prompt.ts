@@ -28,7 +28,7 @@ export interface PromptOptions {
  */
 export function buildSystemPrompt(workspace: string, pluginInstructions = '', opts: PromptOptions = {}): string {
   const parts = [
-    `You are pi, a minimal coding agent running as a desktop app. You operate directly on the user's files.`,
+    `You are Metis, a minimal coding agent running as a desktop app. You operate directly on the user's files.`,
     ``,
     `Working directory: ${workspace}`,
     `Platform: ${process.platform} (shell: ${process.platform === 'win32' ? 'PowerShell by default' : 'bash'})`,

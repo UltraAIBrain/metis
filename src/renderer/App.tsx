@@ -15,9 +15,6 @@ import { Composer } from './components/Composer'
 import { StatusBar } from './components/StatusBar'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Toasts } from './components/Toasts'
-import { SessionModelPicker } from './components/SessionModelPicker'
-import { SessionDir } from './components/SessionDir'
-import { SessionThinking } from './components/SessionThinking'
 import { StartScreen } from './components/StartScreen'
 import { SidePanel } from './components/SidePanel'
 import { AskDialog } from './components/AskDialog'
@@ -25,7 +22,7 @@ import { AskDialog } from './components/AskDialog'
 function Splash({ text }: { text: string }): JSX.Element {
   return (
     <div className="splash">
-      <div className="splash-mark">π</div>
+      <div className="splash-mark">M</div>
       <div className="splash-text">{text}</div>
     </div>
   )
@@ -124,7 +121,7 @@ export function App(): JSX.Element {
   const draft = session?.id === DRAFT_ID
   const onFork = useCallback((id: string) => void store.fork(id), [])
   const onSwitch = useCallback((id: string, dir: -1 | 1) => void store.switchBranch(id, dir), [])
-  const onSend = useCallback((text: string, files: PickedFile[]) => store.send(text, files), [])
+  const onSend = useCallback((sessionId: string, text: string, files: PickedFile[]) => store.send(sessionId, text, files), [])
   const onAbort = useCallback(() => void store.abort(), [])
   const openSettings = useCallback(() => store.openSettings(), [])
   const closeSettings = useCallback(() => store.closeSettings(), [])
@@ -160,9 +157,6 @@ export function App(): JSX.Element {
             {session ? session.title || '未命名会话' : '没有打开的项目'}
           </div>
           <div className="topbar-right">
-            {session && <SessionDir />}
-            {session && <SessionModelPicker />}
-            {session && <SessionThinking />}
             {running && (
               <span className="pill running">
                 <span className="pill-dot" />

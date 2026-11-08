@@ -7,7 +7,7 @@ import type { AgentRunner } from './agent/runner'
 /**
  * 定时任务：cron 表达式（本地时区 5 段）到点把一条 prompt 注入指定会话
  * （走 runner.send，运行中就是 steering 排队，空闲则开跑）。
- * 存 ~/.pidesktop/schedules.json；30s 粒度轮询 + 按"分钟"去重。
+ * 存 ~/.metis/schedules.json；30s 粒度轮询 + 按"分钟"去重。
  */
 
 export interface ScheduleTask {
@@ -131,12 +131,8 @@ function fire(task: ScheduleTask): void {
   } catch (err) {
     // 会话可能已被删除：禁用任务而不是每次都报错
     logger.warn('schedule.fire_failed', { id: task.id, message: (err as Error).message })
-    const store = load()
-    const t = store.tasks.find((x) => x.id === task.id)
-    if (t) {
-      t.enabled = false
-      save(store)
-    }
+    // 与 tick 共用同一个对象，由 tick 统一保存，避免旧快照覆盖禁用状态。
+    task.enabled = false
   }
 }
 
@@ -161,6 +157,11 @@ export function startScheduler(): void {
   if (timer) return
   timer = setInterval(tick, 30_000)
   timer.unref?.()
+  tick()
+}
+
+/** 冒烟测试用：手动触发一次轮询 */
+export function runSchedulerTick(): void {
   tick()
 }
 

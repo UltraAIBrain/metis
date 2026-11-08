@@ -6,6 +6,8 @@ export interface ToolContext {
   shell: ShellKind
   signal: AbortSignal
   log: (event: string, data?: unknown) => void
+  /** 本次执行器允许调用的工具；子智能体按实际下发的工具集校验，不能只靠模型遵守。 */
+  allowedTools?: ReadonlySet<string>
   /** 本次工具调用所在会话（runner 构造 ctx 时注入；插件工具的 ctx 没有） */
   sessionId?: string
   /** 本次工具调用在父会话里的 id（runner 构造 ctx 时注入；插件工具的 ctx 没有） */

@@ -114,6 +114,6 @@ export function trajectoryToMarkdown(t: Trajectory): string {
 
   lines.push('---')
   lines.push('')
-  lines.push('*由 Pi Desktop 导出；机器可读版本请导出 JSON。*')
+  lines.push('*由 Metis 导出；机器可读版本请导出 JSON。*')
   return lines.join('\n')
 }

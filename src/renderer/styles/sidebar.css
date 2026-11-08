@@ -41,11 +41,6 @@
   letter-spacing: 0.2px;
 }
 
-.brand-dim {
-  color: var(--muted);
-  font-weight: 400;
-}
-
 .new-session {
   margin: 0 12px 10px;
   height: 32px;

@@ -57,11 +57,11 @@ export function StartScreen(): JSX.Element {
 
   return (
     <div className="empty-state">
-      <div className="empty-state-mark">π</div>
+      <div className="empty-state-mark">M</div>
       <h2>{hasProjects ? '没有打开的项目' : '新建项目'}</h2>
       <p>
         每个项目绑定一个工作目录。可以直接新建——第一次发送消息时会在
-        <code>~/.pidesktop/projects</code> 下自动建一个；也可以现在指定一个已有仓库。
+        <code>~/.metis/projects</code> 下自动建一个；也可以现在指定一个已有仓库。
       </p>
 
       <div className="start-actions">

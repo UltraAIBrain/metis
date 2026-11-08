@@ -17,7 +17,7 @@ export function buildMenu(): Menu {
     ...(isMac
       ? [
           {
-            label: 'Pi Desktop',
+            label: 'Metis',
             submenu: [
               { role: 'about' as const },
               { type: 'separator' as const },
@@ -70,7 +70,7 @@ export function buildMenu(): Menu {
       label: '帮助',
       submenu: [
         { label: '打开日志目录', click: () => send('open-logs') },
-        { label: '关于 Pi Desktop', click: () => send('about') }
+        { label: '关于 Metis', click: () => send('about') }
       ]
     }
   ]

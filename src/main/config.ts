@@ -340,17 +340,27 @@ export class ConfigStore {
   apiKeyFor(profileId: string): { key: string; source: 'stored' | 'env' | 'none' } {
     const profile = this.profileById(profileId) ?? this.activeProfile()
     if (profile?.apiKey) {
+      let failed = false
       try {
         const key = this.box.decrypt(profile.apiKey)
-        if (key) return { key, source: 'stored' }
-        if (profile.apiKey.startsWith('enc:')) {
-          logger.warn('config.key_unreadable_here', {
-            profileId,
-            reason: 'key was encrypted by the desktop safeStorage and cannot be decrypted in this environment'
-          })
+        if (key) {
+          return { key, source: 'stored' }
         }
-      } catch (err) {
-        logger.warn('config.decrypt_failed', err)
+        failed = profile.apiKey.startsWith('enc:')
+      } catch {
+        // 解密异常（典型：应用更名后 safeStorage 密钥更换，旧密文不可解）——按读取失败处理
+        failed = true
+      }
+      if (failed) {
+        // 不可解的密文没有保留价值：清掉，避免每次启动/读取都重复告警。
+        // 用户重填一次 Key 即可（keyProtected 标记一并清除）。
+        logger.warn('config.key_dropped', {
+          profileId,
+          reason: 'apiKey 无法用当前 safeStorage 密钥解密（应用更名/换机）；已清除该档案的 Key，请重新填写'
+        })
+        delete profile.apiKey
+        delete profile.keyProtected
+        this.save()
       }
     }
     const env = process.env[ENV_KEY[profile?.protocol ?? 'openai']]

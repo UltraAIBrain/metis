@@ -321,6 +321,8 @@ export type AgentEvent =
   | { type: 'thinking_delta'; sessionId: string; messageId: string; delta: string }
   /** 模型发起结构化提问（ask 工具）：渲染层弹卡片，回答经 IPC ask:answer 回填 */
   | { type: 'ask_question'; sessionId: string; callId: string; question: string; options: string[] }
+  /** 提问已回答、取消或超时，移除对应的待答卡片 */
+  | { type: 'ask_closed'; sessionId: string; callId: string }
   /** 会话第一次真正开始运行时，自动创建了项目目录 */
   | { type: 'session_cwd'; sessionId: string; cwd: string }
   /** 上下文压缩完成：当前分支已切到摘要新分支，原分支完整保留 */

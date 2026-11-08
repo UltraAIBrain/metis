@@ -25,7 +25,7 @@ import { resolveBearer, startLogin } from './oauth'
 import { pluginHost } from './plugins'
 import { describeFailure } from './agent/errors'
 import { assertSessionId } from './agent/session'
-import { answerAsk, bindAskDelivery } from './agent/tools/ask'
+import { answerAsk, bindAskCloseDelivery, bindAskDelivery } from './agent/tools/ask'
 import { createSchedule, listSchedules, removeSchedule, updateSchedule, type ScheduleTask } from './scheduler'
 import { searchSessions, type SessionSearchHit } from './session-search'
 import {
@@ -390,6 +390,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   bindAskDelivery((payload) => {
     const win = getWindow()
     if (win) win.webContents.send(IPC.event, { type: 'ask_question', ...payload })
+  })
+  bindAskCloseDelivery((payload) => {
+    const win = getWindow()
+    if (win) win.webContents.send(IPC.event, { type: 'ask_closed', ...payload })
   })
 
   // 内嵌终端事件（流式输出 / 退出）按会话广播给渲染层，渲染层自行按当前会话过滤

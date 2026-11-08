@@ -156,6 +156,15 @@ const TAB_META: Record<View, { title: string; icon: string }> = {
   trace: { title: '轨迹', icon: 'trace' }
 }
 
+/** 「新标签页」动作卡片：打开对应视图 */
+const MENU_ACTIONS: { key: View; icon: string; title: string; desc: string }[] = [
+  { key: 'browser', icon: 'browser', title: '打开浏览器', desc: '浏览网页与预览应用' },
+  { key: 'files', icon: 'folder', title: '查看工作空间', desc: '浏览工作目录与文件' },
+  { key: 'changes', icon: 'changes', title: '查看变更', desc: '查看代码变更与差异' },
+  { key: 'terminal', icon: 'terminal', title: '打开终端', desc: '运行命令和查看输出' },
+  { key: 'trace', icon: 'trace', title: '查看轨迹', desc: '查看模型响应与工具往返' }
+]
+
 /** 标签显示名：浏览器标签显示当前站点（去 www.），其余用固定名 */
 function tabLabel(t: PanelTab): string {
   if (t.view === 'browser' && t.url) {
@@ -609,40 +618,35 @@ export const SidePanel = memo(function SidePanel({ session, full, onToggleFull }
         </div>
       )}
 
-      {/* 「新标签页」起始页：品牌头（π + 项目目录）→ 动作列表 → 产物区，同一列 */}
+      {/* 「新标签页」起始页：标题 → 动作卡片 → 产物区，同一列 */}
       {view === 'menu' && (
         <div className="panel-menu-page">
-          <div className="panel-brand" title={session.cwd}>
-            <span className="panel-brand-mark">π</span>
-            <span className="panel-brand-name">{baseName(session.cwd) || '自动目录'}</span>
-          </div>
+          <h3 className="menu-title">新标签页</h3>
           <div className="panel-actions">
-          <button className="panel-action" type="button" onClick={() => openFeature('browser')}>
-            <Icon name="browser" />
-            <span>打开浏览器</span>
-          </button>
-          <button className="panel-action" type="button" onClick={() => openFeature('files')} title={session.cwd}>
-            <Icon name="folder" />
-            <span>查看工作空间</span>
-          </button>
-          <button className="panel-action" type="button" onClick={() => openFeature('changes')}>
-            <Icon name="changes" />
-            <span>查看变更</span>
-          </button>
-          <button className="panel-action" type="button" onClick={() => openFeature('terminal')}>
-            <Icon name="terminal" />
-            <span>打开终端</span>
-          </button>
-          <button className="panel-action" type="button" onClick={() => openFeature('trace')} title="按回合查看模型响应与工具往返（参数 / 结果 / 耗时）">
-            <Icon name="trace" />
-            <span>查看轨迹</span>
-          </button>
-          {!full && (
-            <button className="panel-action" type="button" onClick={toggleFull} title="面板接管聊天区，多标签页切换">
-              <Icon name="expand" />
-              <span>完整视图</span>
-            </button>
-          )}
+            {MENU_ACTIONS.map((a) => (
+              <div
+                key={a.key}
+                className="panel-action-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => openFeature(a.key)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    openFeature(a.key)
+                  }
+                }}
+              >
+                <span className="action-ico">
+                  <Icon name={a.icon} />
+                </span>
+                <span className="action-main">
+                  <span className="action-title">{a.title}</span>
+                  <span className="action-desc">{a.desc}</span>
+                </span>
+                <span className="action-open">打开</span>
+              </div>
+            ))}
           </div>
 
           <div className="panel-section">
