@@ -289,7 +289,11 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
                         index: 0,
                         id: `call_long_${assistantTurns}`,
                         type: 'function',
-                        function: { name: 'read', arguments: JSON.stringify({ path: 'demo/hello.txt' }) }
+                        // 参数每轮变化：这个用例只验证「不截断」，重复检测交给 [13e]
+                        function: {
+                          name: 'read',
+                          arguments: JSON.stringify({ path: 'demo/hello.txt', limit: 1 + (assistantTurns % 3) })
+                        }
                       }
                     ]
                   }
@@ -302,6 +306,40 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
             send({ choices: [{ index: 0, delta: { content: '第 45 轮做完，没有步数上限。' } }] })
             send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
             send({ choices: [], usage: { prompt_tokens: 60, completion_tokens: 10 } })
+          }
+          res.write('data: [DONE]\n\n')
+          res.end()
+          return
+        }
+
+        // 重复调用检测：连续 6 次完全相同的 read，之后自己收尾。
+        // 用来验证「连续相同 → 提示换思路」，以及循环不会因此被强行中断。
+        if (model0 === 'mock-repeat') {
+          if (assistantTurns < 6) {
+            send({ choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: `call_rep_${assistantTurns}`,
+                        type: 'function',
+                        function: { name: 'read', arguments: JSON.stringify({ path: 'demo/hello.txt' }) }
+                      }
+                    ]
+                  }
+                }
+              ]
+            })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+            send({ choices: [], usage: { prompt_tokens: 40, completion_tokens: 6 } })
+          } else {
+            send({ choices: [{ index: 0, delta: { content: '收到重复提醒，改变做法。' } }] })
+            send({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+            send({ choices: [], usage: { prompt_tokens: 60, completion_tokens: 8 } })
           }
           res.write('data: [DONE]\n\n')
           res.end()
@@ -1164,6 +1202,75 @@ async function main(): Promise<void> {
   check('不再出现步数相关的停止提示', capNoise.length === 0, JSON.stringify(capNoise))
   const longEnd = longEvents.find((e) => e.type === 'run_end')
   check('跑到模型自己收尾才结束', longEnd?.type === 'run_end' && longEnd.status === 'done', JSON.stringify(longEnd))
+  console.log('\n[13d] 重复调用检测（纯函数）')
+  const { noteCall, callKey, canonicalInput, REPEAT_REMIND_EVERY } = await import('../src/main/agent/repeat-guard')
+  check(
+    '参数键序不同视为同一次调用',
+    callKey('read', { path: 'a.txt', limit: 10 }) === callKey('read', { limit: 10, path: 'a.txt' }),
+    callKey('read', { path: 'a.txt', limit: 10 })
+  )
+  check('参数不同则是不同调用', callKey('read', { path: 'a.txt' }) !== callKey('read', { path: 'b.txt' }))
+  check('工具不同则是不同调用', callKey('read', { path: 'a.txt' }) !== callKey('write', { path: 'a.txt' }))
+  check('嵌套对象也按键序规范化', canonicalInput({ a: { y: 1, x: 2 } }) === canonicalInput({ a: { x: 2, y: 1 } }))
+
+  // 连续计数与提醒节奏：第 3、6 次提醒，中间不刷屏
+  const rep1 = noteCall(undefined, 'bash', { command: 'npm run build' })
+  check('首次调用计数为 1', rep1.count === 1 && !rep1.remind)
+  const rep2 = noteCall(rep1.state, 'bash', { command: 'npm run build' })
+  check('第二次仍不提醒', rep2.count === 2 && !rep2.remind)
+  const rep3 = noteCall(rep2.state, 'bash', { command: 'npm run build' })
+  check(`第 ${REPEAT_REMIND_EVERY} 次提醒`, rep3.count === 3 && rep3.remind, `count=${rep3.count}`)
+  const rep4 = noteCall(rep3.state, 'bash', { command: 'npm run build' })
+  check('第四次不重复刷屏', rep4.count === 4 && !rep4.remind)
+  const rep5 = noteCall(rep4.state, 'bash', { command: 'npm run build' })
+  check('第五次仍不刷屏', rep5.count === 5 && !rep5.remind)
+  const rep6 = noteCall(rep5.state, 'bash', { command: 'npm run build' })
+  check('第六次再次提醒', rep6.count === 6 && rep6.remind)
+
+  // 中间插入别的调用就重置——「连续」才有意义
+  const interrupted = noteCall(rep6.state, 'read', { path: 'a.txt' })
+  check('插入别的调用后计数重置', interrupted.count === 1)
+  const backAgain = noteCall(interrupted.state, 'bash', { command: 'npm run build' })
+  check('回到原调用也从 1 重新算', backAgain.count === 1 && !backAgain.remind)
+  console.log('\n[13e] 重复调用检测（端到端）')
+  const repSession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-repeat' })
+  const repEvents: AgentEvent[] = []
+  const repRunner = new AgentRunner(sessions, config, logger, (e) => repEvents.push(e))
+  await new Promise<void>((resolve) => {
+    const timer = setInterval(() => {
+      if (repEvents.some((e) => e.type === 'run_end')) {
+        clearInterval(timer)
+        resolve()
+      }
+    }, 20)
+    setTimeout(() => {
+      clearInterval(timer)
+      resolve()
+    }, 60_000)
+    repRunner.send(repSession.id, '反复读同一个文件')
+  })
+
+  const repTools = sessions
+    .view(repSession.id)
+    .messages.filter((m): m is ToolMessage => m.role === 'tool' && m.name === 'read')
+  check('六次调用都执行了（没被中途掐断）', repTools.length === 6, `实际 ${repTools.length} 次`)
+  check('第 1、2 次没有提醒', !repTools[0].content.includes('重复调用提醒') && !repTools[1].content.includes('重复调用提醒'))
+  check('第 3 次在结果里提醒模型', repTools[2]?.content.includes('重复调用提醒') === true, repTools[2]?.content.slice(-120))
+  check('第 4、5 次不重复刷屏', !repTools[3]?.content.includes('重复调用提醒') && !repTools[4]?.content.includes('重复调用提醒'))
+  check('第 6 次再次提醒', repTools[5]?.content.includes('重复调用提醒') === true)
+  check('提醒里带上了工具名与次数', repTools[2]?.content.includes('read') && repTools[2]?.content.includes('连续第 3 次'))
+
+  const repNotices = repEvents.filter(
+    (e): e is Extract<AgentEvent, { type: 'notice' }> => e.type === 'notice' && e.text.includes('检测到重复调用')
+  )
+  check('用户侧也收到两条提醒', repNotices.length === 2, JSON.stringify(repNotices.map((n) => n.text)))
+  check('提醒级别是 warn', repNotices.every((n) => n.level === 'warn'))
+
+  const repAssistants = sessions.view(repSession.id).messages.filter((m) => m.role === 'assistant')
+  check('模型自己收尾才结束（7 条 assistant）', repAssistants.length === 7, `${repAssistants.length}`)
+  const repEnd = repEvents.find((e) => e.type === 'run_end')
+  check('结束状态是 done 而非 error', repEnd?.type === 'run_end' && repEnd.status === 'done', JSON.stringify(repEnd))
+
   console.log('\n[13c] 上下文窗口解析（状态栏百分比）')
   const { resolveContextWindow } = await import('../src/shared/model-catalog')
   // 复现过的真实事故：接口说 deepseek-flash 是 1M，内置表只有泛化的 128K，
