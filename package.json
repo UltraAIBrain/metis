@@ -20,6 +20,7 @@
     "dist:win": "npm run build && electron-builder --win nsis",
     "dist:mac": "npm run build && electron-builder --mac dmg",
     "dist:linux": "npm run build && electron-builder --linux AppImage",
+    "dist:cli": "npm run typecheck && node scripts/build-cli-exe.cjs",
     "icon": "electron scripts/make-icon.cjs",
     "metis": "node out/main/cli.js"
   },

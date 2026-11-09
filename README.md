@@ -150,6 +150,7 @@ metis/
 **运行时**：无（全部逻辑走本地代码 + 原生 `fetch`）。
 
 **开发/构建**：`electron` `electron-vite` `electron-builder` `vite` `@vitejs/plugin-react` `react` `react-dom` `typescript` `@types/*` `tsx`。
+另外 `postject` 只在 `npm run dist:cli`（打终端版单文件 exe）时需要，按需 `npm i -D postject`，不进默认依赖。
 
 ## 6. 运行 / 构建 / 打包
 
@@ -170,7 +171,20 @@ npm run pack       # 免安装目录（release/win-unpacked）
 npm run dist:win   # Windows NSIS 安装包
 npm run dist:mac   # macOS dmg
 npm run dist:linux # Linux AppImage
+npm run dist:cli   # 终端版单文件 exe（release-cli/metis.exe，Node SEA）
 ```
+
+终端版有两种"装起来"的方式，按要不要依赖 Node 选：
+
+| 方式 | 命令 | 产物 | 要求 |
+| --- | --- | --- | --- |
+| 全局命令（推荐自用） | `npm link` | `metis` / `metis.cmd` / `metis.ps1` shim | 本机有 Node ≥ 20；改完源码 `npm run build` 即生效 |
+| 独立 exe（分发用） | `npm i -D postject && npm run dist:cli` | `release-cli/metis.exe`，约 90MB | 无需目标机装 Node |
+
+`dist:cli` 用 esbuild 把 `src/cli/index.ts` 重新打成**单文件** CJS（electron-vite 的产物会把
+共享模块拆进 `out/main/chunks/`，SEA 只收一个文件），再经 `--experimental-sea-config` 生成
+blob 并注入 `node.exe`。Windows 上会先尝试 `signtool remove /s` 摘签名，找不到就跳过并提示。
+体积大是因为塞进了整个 Node 运行时——这正是"极简"要付的代价，自用没必要。
 
 > Electron 二进制默认从 GitHub 下载。网络较慢时可临时指定镜像：
 > `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install`
@@ -462,6 +476,8 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
   工具行 `⏺ name 参数` → `✓ 结果 · 耗时`、用量行），运行中再输入会排队注入（steering），
   Ctrl+C 只中止当前任务。  命令：`/help /new /sessions /switch /model /thinking /login /logout /compact /attach /export /memory /tools /quit`。
   启动参数：`--new`（强制新会话）、`--session <id>`、`--dir <目录>`、`--home <数据目录>`、`--help`。
+  装成全局命令：`npm link` 后直接 `metis`（需 Node ≥ 20；`bin` 已声明，入口带 shebang，
+  Windows 的 `.cmd` shim 与 macOS/Linux 的符号链接都能跑）。要免 Node 的单文件 exe 见 §6 的 `dist:cli`。
 
 ## 10. 验证
 

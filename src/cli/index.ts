@@ -1,9 +1,12 @@
+#!/usr/bin/env node
 /**
  * Pi 终端版：纯 Node REPL，零 Electron 依赖。
  * 复用主进程的全部核心（runner / session / config / tools / plugins / 记忆 / 轨迹），
  * 只把界面换成终端流式渲染。
  *
  * 启动：pi [--new] [--session <id>] [--dir <工作目录>]
+ * 上面的 shebang 是 `npm link` / `npm i -g` 后能直接敲 metis 的前提（Windows 的 .cmd
+ * shim 不需要它，macOS/Linux 的符号链接需要）。rollup / esbuild 都会把它提到产物首行。
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
