@@ -33,7 +33,7 @@ export function runSystemRegressions(): void {
     { platform: 'win32', shell: '', kind: 'cmd', expected: 'cmd.exe' },
     { platform: 'win32', shell: '', kind: 'bash', expected: 'bash.exe' },
     { platform: 'win32', shell: '', kind: 'powershell', expected: 'powershell.exe' },
-    { platform: 'win32', shell: '', kind: 'auto', expected: join('C:/Programs', 'PowerShell', '7', 'pwsh.exe') }
+    { platform: 'win32', shell: '', kind: 'auto', expected: 'pwsh.exe' }
   ]) {
     const calls: { file: string; args: string[]; options: { cwd: string; windowsHide: boolean; env: Record<string, string> } }[] = []
     const child = Object.assign(new EventEmitter(), {

@@ -86,6 +86,13 @@ async function tokenRequest(
   body: Record<string, string>,
   timeoutMs = 20_000
 ): Promise<OAuthTokens> {
+  // 端点守卫：只允许 https 或本机回环（回环供测试注入假认证服务）。
+  // 防 SSRF：code_verifier / refresh_token 永不发往非预期主机。
+  const endpoint = new URL(url)
+  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)
+  if (endpoint.protocol !== 'https:' && !loopback) {
+    throw new Error(`拒绝向非 https 端点发送凭据：${url}`)
+  }
   let res: Response
   try {
     res = await fetch(url, {

@@ -1875,9 +1875,8 @@ async function main(): Promise<void> {
           }
         })
       })
-      srv.listen(0, '127.0.0.1', () => {
-        const addr = srv.address() as { port: number }
-        resolve({ url: `http://127.0.0.1:${addr.port}`, close: () => srv.close() })
+      srv.listen(38471, '127.0.0.1', () => {
+        resolve({ url: 'http://127.0.0.1:38471', close: () => srv.close() })
       })
     })
 
@@ -1983,9 +1982,8 @@ async function main(): Promise<void> {
           res.end()
         })
       })
-      s.listen(0, '127.0.0.1', () => {
-        const addr = s.address() as { port: number }
-        resolve({ url: `http://127.0.0.1:${addr.port}`, close: () => s.close() })
+      s.listen(38472, '127.0.0.1', () => {
+        resolve({ url: 'http://127.0.0.1:38472', close: () => s.close() })
       })
     })
 

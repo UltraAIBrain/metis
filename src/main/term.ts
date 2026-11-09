@@ -185,7 +185,7 @@ class TermHost {
     if (!existsSync(cwd)) throw new Error(`目录不存在：${cwd}`)
 
     const shellKind = isShellKind(rawKind) ? rawKind : resolveKind('auto')
-    const { file, args } = shellCommand(shellKind)
+    const { args } = shellCommand(shellKind)
     // 合成启动横幅（管道模式 shell 不打真实 banner）：一行版本 + 交给 shell 自己的提示符
     // child 在下方启动，这里先占位、spawn 后立即回填
     const proc: TermProc = {
@@ -199,7 +199,22 @@ class TermHost {
     }
     this.procs.set(sessionId, proc)
 
-    const child = spawn(file, args, { cwd, windowsHide: true, env: shellSpawnEnv() })
+    // 启动程序字面量分派：Windows 用固定系统 shell 名（pwsh 走 PATH 解析，WindowsApps 别名在
+    // PATH 上）；Unix 用用户登录 shell（绝对路径校验后才进入 spawn，杜绝任意字符串）。
+    let child: ChildProcess
+    if (process.platform !== 'win32') {
+      const login = process.env.SHELL || '/bin/bash'
+      if (!login.startsWith('/')) throw new Error(`拒绝非绝对路径的登录 shell：${login}`)
+      child = spawn(login, args, { cwd, windowsHide: true, env: shellSpawnEnv() })
+    } else if (shellKind === 'cmd') {
+      child = spawn('cmd.exe', args, { cwd, windowsHide: true, env: shellSpawnEnv() })
+    } else if (shellKind === 'bash') {
+      child = spawn('bash.exe', args, { cwd, windowsHide: true, env: shellSpawnEnv() })
+    } else if (shellKind === 'powershell') {
+      child = spawn('powershell.exe', args, { cwd, windowsHide: true, env: shellSpawnEnv() })
+    } else {
+      child = spawn('pwsh.exe', args, { cwd, windowsHide: true, env: shellSpawnEnv() })
+    }
 
     proc.child = child
 
@@ -252,8 +267,14 @@ class TermHost {
     this.procs.delete(sessionId)
     try {
       if (process.platform === 'win32' && proc.child.pid) {
-        // shell 里可能跑着用户命令的子进程，杀整棵树而不是只杀 shell 本体
-        spawn('taskkill', ['/pid', String(proc.child.pid), '/T', '/F'], { windowsHide: true })
+        // shell 里可能跑着用户命令的子进程，杀整棵树而不是只杀 shell 本体；
+        // pid 先做纯数字校验（防御性：确保没有非数字字符进入参数）
+        const pid = String(proc.child.pid)
+        if (/^\d+$/.test(pid)) {
+          spawn('taskkill', ['/pid', pid, '/T', '/F'], { windowsHide: true })
+        } else {
+          proc.child.kill()
+        }
       } else {
         proc.child.kill()
       }
