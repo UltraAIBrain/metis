@@ -85,6 +85,8 @@ interface ActiveRun {
  */
 export class AgentRunner {
   private active = new Map<string, ActiveRun>()
+  /** 正在压缩的会话（用于给出比"任务运行中"更准确的提示） */
+  private compacting = new Set<string>()
 
   constructor(
     private sessions: SessionStore,
@@ -142,10 +144,16 @@ export class AgentRunner {
   /**
    * 上下文压缩：把当前分支整段交给模型总结，摘要作为**新分支的根**（appendRoot）。
    * 原对话分支完整保留（分支切换可回看），新分支从摘要继续——不偷偷改历史。
+   *
+   * 压缩要等一次完整的模型往返（几秒到几十秒），这段窗口期必须在 active 里占一个租约：
+   * 否则用户此时发消息会另起一个 run，而 appendRoot 把 leaf 指到摘要新根之后，
+   * 那个 run 每步都从新根解析历史——用户刚发的话就从上下文里消失了。
+   * 占租约之后 send() 自然走排队分支，压缩结束再交给一个正常 run 处理；Esc 也能中断压缩。
    */
   async compact(sessionId: string): Promise<void> {
     if (!this.sessions.exists(sessionId)) throw new Error('会话不存在或已被删除')
     if (this.active.has(sessionId)) throw new Error('任务运行中，请等结束后再压缩。')
+    if (this.compacting.has(sessionId)) throw new Error('正在压缩上下文，请稍候。')
 
     const cfg = this.config.load()
     const meta = this.sessions.meta(sessionId)
@@ -157,52 +165,96 @@ export class AgentRunner {
     const history = this.sessions.view(sessionId).messages
     if (history.length < 2) throw new AgentFailure('config', '会话内容太少，无需压缩。')
 
-    const bearer = await resolveBearer(this.config, profile)
-    if (!bearer && !isLocalHost(profile.baseUrl)) {
-      throw new AgentFailure('config', `「${profile.label}」还没有配置凭据，无法压缩。`)
-    }
-    const provider = createProvider(profile.protocol, profile.baseUrl, bearer, (event, data) =>
-      this.log.info(event, data)
-    )
+    // 租约必须在第一个 await 之前登记：前面全是同步校验，窗口期不留缝
+    const lease: ActiveRun = { sessionId, abort: new AbortController(), queue: [], startedAt: Date.now() }
+    this.active.set(sessionId, lease)
+    this.compacting.add(sessionId)
+    this.emit({ type: 'run_start', sessionId, at: Date.now() })
+    this.log.info('session.compact_start', { sessionId, fromMessages: history.length, model })
 
-    this.emit({ type: 'notice', sessionId, level: 'info', text: '正在压缩上下文（总结当前分支）…' })
-    const result = await streamWithRetry(
-      provider,
-      {
-        system: COMPACT_SYSTEM,
-        messages: history,
-        tools: [],
-        model,
-        temperature: 0.2,
-        thinking: 'low',
-        maxTokens: 4000,
-        signal: new AbortController().signal,
-        onTextDelta: () => {}
-      },
-      (event, data) => this.log.info(event, data)
-    )
-    const text = result.blocks
-      .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n')
-      .trim()
-    if (!text) throw new AgentFailure('bad_response', '压缩失败：模型没有返回摘要。')
+    let status: 'done' | 'aborted' | 'error' = 'done'
+    let failure: AgentError | undefined
 
-    const summary: Message = {
-      role: 'user',
-      id: newId('u'),
-      ts: Date.now(),
-      text: `[上下文压缩摘要 · ${new Date().toLocaleString('zh-CN')}]\n\n以下是此前对话的自动摘要；完整原对话保留在另一条分支上（在最早的助手消息处用 ‹ › 可切回）：\n\n${text}`
+    try {
+      const bearer = await resolveBearer(this.config, profile)
+      if (!bearer && !isLocalHost(profile.baseUrl)) {
+        throw new AgentFailure('config', `「${profile.label}」还没有配置凭据，无法压缩。`)
+      }
+      const provider = createProvider(profile.protocol, profile.baseUrl, bearer, (event, data) =>
+        this.log.info(event, data)
+      )
+
+      this.emit({ type: 'notice', sessionId, level: 'info', text: '正在压缩上下文（总结当前分支）…' })
+      const result = await streamWithRetry(
+        provider,
+        {
+          system: COMPACT_SYSTEM,
+          messages: history,
+          tools: [],
+          model,
+          temperature: 0.2,
+          thinking: 'low',
+          maxTokens: 4000,
+          signal: lease.abort.signal,
+          onTextDelta: () => {}
+        },
+        (event, data) => this.log.info(event, data)
+      )
+      const text = result.blocks
+        .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n')
+        .trim()
+      if (!text) throw new AgentFailure('bad_response', '压缩失败：模型没有返回摘要。')
+
+      const summary: Message = {
+        role: 'user',
+        id: newId('u'),
+        ts: Date.now(),
+        text: `[上下文压缩摘要 · ${new Date().toLocaleString('zh-CN')}]\n\n以下是此前对话的自动摘要；完整原对话保留在另一条分支上（在最早的助手消息处用 ‹ › 可切回）：\n\n${text}`
+      }
+      this.sessions.appendRoot(sessionId, summary)
+      this.log.info('session.compacted', { sessionId, fromMessages: history.length, summaryChars: text.length })
+      this.emit({ type: 'session_compacted', sessionId })
+      this.emit({
+        type: 'notice',
+        sessionId,
+        level: 'info',
+        text: `上下文已压缩：${history.length} 条消息 → 摘要分支（原分支保留）`
+      })
+    } catch (err) {
+      if (lease.abort.signal.aborted) {
+        status = 'aborted'
+        this.emit({ type: 'notice', sessionId, level: 'warn', text: '已取消压缩上下文，原分支未改动。' })
+      } else {
+        status = 'error'
+        failure = describeFailure(err)
+        throw err
+      }
+    } finally {
+      this.compacting.delete(sessionId)
+      this.active.delete(sessionId)
+      const leftover = lease.queue.splice(0)
+      const aborted = lease.abort.signal.aborted
+      if (aborted) {
+        // 中止：排队消息落盘保留，语义与 run 中止一致——不能静默吞掉用户已发的字
+        this.persistQueued(sessionId, leftover)
+      }
+      this.emit({ type: 'run_end', sessionId, status, error: failure })
+      this.log.info('session.compact_end', { sessionId, status, leftover: leftover.length })
+      // 压缩期间排队的消息：无论压缩成功与否都交给一个正常 run 处理
+      // （压缩失败是压缩的事，用户的输入不该跟着丢）
+      if (!aborted && leftover.length) {
+        const next: ActiveRun = {
+          sessionId,
+          abort: new AbortController(),
+          queue: leftover,
+          startedAt: Date.now()
+        }
+        this.active.set(sessionId, next)
+        void this.loop(next)
+      }
     }
-    this.sessions.appendRoot(sessionId, summary)
-    this.log.info('session.compacted', { sessionId, fromMessages: history.length, summaryChars: text.length })
-    this.emit({ type: 'session_compacted', sessionId })
-    this.emit({
-      type: 'notice',
-      sessionId,
-      level: 'info',
-      text: `上下文已压缩：${history.length} 条消息 → 摘要分支（原分支保留）`
-    })
   }
 
   abortAll(): void {
@@ -763,22 +815,7 @@ export class AgentRunner {
       // 把它们注入落盘为正式消息，用户下次发消息时模型就能看到。
       const leftover = run.queue.splice(0)
       if (run.abort.signal.aborted) {
-        for (const raw of leftover) {
-          try {
-            const parsed = JSON.parse(raw) as { text: string; attachments?: unknown }
-            const kept: Message = {
-              role: 'user',
-              id: newId('u'),
-              ts: Date.now(),
-              text: parsed.text,
-              attachments: validAttachmentsFor(sessionId, parsed.attachments)
-            }
-            this.sessions.append(sessionId, kept)
-            this.emit({ type: 'message_added', sessionId, message: kept })
-          } catch (err) {
-            this.log.warn('run.leftover_persist_failed', { sessionId, err: String(err) })
-          }
-        }
+        this.persistQueued(sessionId, leftover)
         if (leftover.length) {
           this.emit({
             type: 'notice',
@@ -812,6 +849,34 @@ export class AgentRunner {
         void this.loop(next)
       }
     }
+  }
+
+  /**
+   * 把队列里残留的用户消息落盘为正式消息。
+   * 中止不能静默丢掉用户已经发出去的字：界面上它显示为"已排队"，
+   * 下次发消息时模型必须能看见它。返回成功落盘的条数。
+   * 不修改传入数组 —— 调用方还要用它判断"有没有残留"。
+   */
+  private persistQueued(sessionId: string, queue: readonly string[]): number {
+    let kept = 0
+    for (const raw of queue) {
+      try {
+        const parsed = JSON.parse(raw) as { text: string; attachments?: unknown }
+        const message: Message = {
+          role: 'user',
+          id: newId('u'),
+          ts: Date.now(),
+          text: parsed.text,
+          attachments: validAttachmentsFor(sessionId, parsed.attachments)
+        }
+        this.sessions.append(sessionId, message)
+        this.emit({ type: 'message_added', sessionId, message })
+        kept++
+      } catch (err) {
+        this.log.warn('run.leftover_persist_failed', { sessionId, err: String(err) })
+      }
+    }
+    return kept
   }
 
   private cancelledResult(call: ToolUseBlock): ToolMessage {

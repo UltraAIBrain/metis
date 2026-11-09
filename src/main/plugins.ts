@@ -412,7 +412,8 @@ class PluginHost {
     }
   }
 
-  private uniqueId(base: string): string {    const root = this.pluginRoot()
+  private uniqueId(base: string): string {
+    const root = this.pluginRoot()
     let id = base
     let n = 2
     while (existsSync(join(root, id))) id = `${base}-${n++}`

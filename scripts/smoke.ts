@@ -2072,6 +2072,74 @@ async function main(): Promise<void> {
         Boolean((final[0] as { text?: string }).text?.includes('上下文压缩摘要')),
       `seen=${seenLastUserContent.length} final=${final.length}`
     )
+
+    /* 压缩期间发消息：压缩占着 active 租约，send 必须排队，
+       而不是并发起一个会跟摘要新根抢 leaf 的 run（否则用户那句话会从上下文里消失） */
+    {
+      const raceDir = join(workspace, 'compact-race')
+      mkdirSync(raceDir, { recursive: true })
+      const raceSid = sessions.create(raceDir, { profileId: 'deepseek', model: 'mock-small' }).id
+      const t = Date.now()
+      sessions.append(raceSid, { role: 'user', id: 'ru1', ts: t - 2000, text: 'RACE 起点' })
+      sessions.append(raceSid, {
+        role: 'assistant', id: 'ra1', ts: t - 1000, model: 'mock-small', provider: 'openai',
+        stopReason: 'stop', usage: { input: 10, output: 5 }, blocks: [{ type: 'text', text: '收到。' }]
+      })
+
+      const pending = runner.compact(raceSid)
+      // 压缩的模型往返还没回来就发送：应当排队，而不是另起一个 run
+      const racedSend = runner.send(raceSid, 'RACE 压缩中发的话')
+      check('压缩期间发送进入排队', racedSend.queued === true, JSON.stringify(racedSend))
+      check('压缩期间会话仍视为运行中', runner.isRunning(raceSid), 'isRunning=false')
+
+      let again = ''
+      try {
+        await runner.compact(raceSid)
+      } catch (err) {
+        again = (err as Error).message
+      }
+      check('压缩进行中拒绝重复压缩', again.includes('运行中') || again.includes('正在压缩'), again || '(未拒绝)')
+
+      await pending
+      await new Promise((r) => setTimeout(r, 700))
+
+      const msgs = sessions.view(raceSid).messages
+      const head = (msgs[0] as { text?: string } | undefined)?.text ?? ''
+      check(
+        '压缩期间排队的消息落在摘要分支上',
+        msgs[0]?.role === 'user' &&
+          head.includes('上下文压缩摘要') &&
+          msgs.some((m) => (m as { text?: string }).text === 'RACE 压缩中发的话') &&
+          msgs.length >= 3,
+        JSON.stringify(msgs.map((m) => `${m.role}:${((m as { text?: string }).text ?? '').slice(0, 8)}`))
+      )
+    }
+
+    /* 压缩可被 Esc 打断：原分支不动，排队消息照常落盘（不能因为中止就吞掉用户的话） */
+    {
+      const abortDir = join(workspace, 'compact-abort')
+      mkdirSync(abortDir, { recursive: true })
+      const abortSid = sessions.create(abortDir, { profileId: 'deepseek', model: 'mock-small' }).id
+      sessions.append(abortSid, { role: 'user', id: 'au1', ts: Date.now() - 2000, text: 'ABORT 起点' })
+      sessions.append(abortSid, {
+        role: 'assistant', id: 'aa1', ts: Date.now() - 1000, model: 'mock-small', provider: 'openai',
+        stopReason: 'stop', usage: { input: 10, output: 5 }, blocks: [{ type: 'text', text: '收到。' }]
+      })
+
+      const pendingAbort = runner.compact(abortSid)
+      runner.send(abortSid, 'ABORT 排队的话')
+      runner.abort(abortSid)
+      await pendingAbort
+
+      const kept = sessions.view(abortSid).messages
+      check(
+        '压缩被中止：原分支不变、排队消息已落盘',
+        kept.length === 3 &&
+          !((kept[0] as { text?: string } | undefined)?.text ?? '').includes('上下文压缩摘要') &&
+          kept.some((m) => (m as { text?: string }).text === 'ABORT 排队的话'),
+        JSON.stringify(kept.map((m) => `${m.role}:${((m as { text?: string }).text ?? '').slice(0, 8)}`))
+      )
+    }
   }
 
   /* ---------------- [32] 记忆检索 / nudge / 技能 / fetch / USER / SOUL ---------------- */

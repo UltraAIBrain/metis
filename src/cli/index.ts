@@ -16,6 +16,7 @@ import { AgentRunner } from '../main/agent/runner'
 import { pluginHost } from '../main/plugins'
 import { attachmentLimit, MAX_ATTACHMENTS, MAX_IMAGE_BYTES, pickMime, stageAttachment } from '../main/attachments'
 import { startLogin } from '../main/oauth'
+import { answerAsk, bindAskCloseDelivery, bindAskDelivery } from '../main/agent/tools/ask'
 import { buildTrajectory } from '../main/trajectory'
 import { trajectoryToMarkdown } from '../main/trajectory-md'
 import type { AgentEvent, AssistantMessage, ToolMessage } from '../shared/types'
@@ -50,9 +51,14 @@ const runningIds = new Set<string>()
 const toolStartedAt = new Map<string, number>()
 let rlRef: readline.Interface | null = null
 let sigintPending = false
+/** 已决定退出：此后的 prompt 都跳过，免得"再见"后面再冒出一个 › */
+let quitting = false
+/** 模型反问（ask 工具）挂起时存在；此时下一行输入是答案，不是新消息 */
+let pendingAsk: { callId: string; question: string; options: string[] } | null = null
 
 /** 统一退出：先关日志，留一拍让 stdout/日志流 flush，避免 process.exit 丢缓冲 */
 function exitSoon(code: number): void {
+  quitting = true
   logger.close()
   setTimeout(() => process.exit(code), 80).unref?.()
 }
@@ -83,9 +89,14 @@ function renderEvent(e: AgentEvent): void {
   // 运行状态无条件跟踪（否则切换会话后旧 run 的 run_end 被过滤，running 会永远卡住）；
   // 其余输出按当前会话路由：切走后旧会话的事件不再往新会话的终端里打
   if (e.type === 'run_start') runningIds.add(e.sessionId)
-  if (e.type === 'run_end') runningIds.delete(e.sessionId)
+  if (e.type === 'run_end') {
+    runningIds.delete(e.sessionId)
+    // 复位必须发生在会话过滤之前：切到别的会话时下面会早退，
+    // 漏掉复位会让下一次 Ctrl+C 被误判成"第二次"，直接强退、任务来不及收尾
+    sigintPending = false
+  }
   if ('sessionId' in e && e.sessionId !== sessionId) {
-    if (e.type === 'run_end' && runningIds.size === 0) rlRef?.prompt()
+    if (e.type === 'run_end' && runningIds.size === 0 && !quitting) rlRef?.prompt()
     return
   }
   switch (e.type) {
@@ -111,6 +122,7 @@ function renderEvent(e: AgentEvent): void {
       const arg = typeof input.command === 'string' ? short(input.command)
         : typeof input.path === 'string' ? String(input.path)
         : e.name === 'task' && typeof input.label === 'string' ? `子任务「${input.label}」${typeof input.prompt === 'string' ? ` · ${short(input.prompt, 60)}` : ''}`
+        : e.name === 'ask' && typeof input.question === 'string' ? `「${short(input.question, 40)}」`
         : ''
       write(`  ${c.cyan('⏺ ' + e.name)} ${c.dim(arg)}\n`)
       break
@@ -142,9 +154,9 @@ function renderEvent(e: AgentEvent): void {
       write(`  ${c.yellow('! ' + e.text.replace(/\n/g, ' '))}\n`)
       break
     case 'run_end': {
-      sigintPending = false
       if (e.status === 'aborted') write(`  ${c.yellow('已中止')}\n`)
-      if (runningIds.size === 0) rlRef?.prompt()
+      // 压缩自己也会发 run_end，但提示符由命令队列收尾负责（见 compacting 注释）
+      if (runningIds.size === 0 && !compacting && !quitting) rlRef?.prompt()
       break
     }
     default:
@@ -190,6 +202,41 @@ async function runLogin(): Promise<{ accessToken: string; refreshToken: string; 
   return login.promise
 }
 
+/**
+ * ask 工具在终端里的落点：模型反问时打印问题与候选，下一行输入即为答案。
+ * 桌面版由渲染层弹卡片（ipc.ts 绑定同一对投递器）；不绑定的话 ask 在 CLI 里永远返回
+ * "提问通道不可用（界面未就绪）"，而系统提示词照样向模型宣传这个工具。
+ */
+function bindAskBridge(): void {
+  bindAskDelivery(({ callId, question, options }) => {
+    pendingAsk = { callId, question, options }
+    write(`\n  ${c.cyan('? ')}${question}\n`)
+    options.forEach((o, i) => write(`    ${c.bold(String(i + 1))}. ${o}\n`))
+    write(`  ${c.dim('输入编号选择，或直接输入你的回答（Ctrl+C 中止任务）')}\n`)
+    rlRef?.setPrompt(c.cyan('答 › '))
+    rlRef?.prompt()
+  })
+  // 超时 / 中止 / 已回答都会走到这里：清掉挂起状态并还原提示符
+  bindAskCloseDelivery(({ callId }) => {
+    if (pendingAsk?.callId !== callId) return
+    pendingAsk = null
+    rlRef?.setPrompt(c.cyan('› '))
+    rlRef?.prompt()
+  })
+}
+
+/** 把一行输入当作 ask 的回答：数字 = 选编号，其余 = 自由文本 */
+function answerPendingAsk(ask: NonNullable<typeof pendingAsk>, text: string): void {
+  pendingAsk = null
+  rlRef?.setPrompt(c.cyan('› '))
+  const n = Number(text)
+  const index = Number.isInteger(n) && n >= 1 && n <= ask.options.length ? n - 1 : -1
+  if (!answerAsk(ask.callId, index, index >= 0 ? ask.options[index] ?? '' : text)) {
+    write(`  ${c.dim('（该提问已失效）')}\n`)
+  }
+  // 这里不 prompt：工具结果会继续本轮对话，run_end 会恢复提示符
+}
+
 function currentView(): { model: string; thinking: string; title: string } {
   const cfg = config.load()
   const meta = sessions.meta(sessionId)
@@ -202,6 +249,12 @@ function currentView(): { model: string; thinking: string; title: string } {
 /** 命令队列：保证多条命令按到达顺序逐个执行，不互相拦截 */
 const commandQueue: string[] = []
 let draining = false
+/**
+ * /compact 期间抑制 run_end 的提示符恢复。
+ * 压缩故意复用了 run_start / run_end（这样界面上它才是"运行中"、Ctrl+C 也能中止），
+ * 但命令本身还在 await 中，drainCommands 收尾会再 prompt 一次——不抑制就会打印两个提示符。
+ */
+let compacting = false
 
 async function drainCommands(): Promise<void> {
   if (draining) return
@@ -215,7 +268,7 @@ async function drainCommands(): Promise<void> {
     }
   }
   draining = false
-  rlRef?.prompt()
+  if (!quitting) rlRef?.prompt()
 }
 
 async function handleCommand(line: string): Promise<boolean> {
@@ -297,8 +350,17 @@ async function handleCommand(line: string): Promise<boolean> {
     case 'model': {
       if (rest[0] === 'use') {
         const [, profileId, model] = rest
+        // 参数缺失时不能静默清空绑定：setModel('','') 会把会话退回全局默认
+        if (!profileId || !model) {
+          write('用法：/model use <档案id> <模型名>（/model 查看档案与候选模型）\n')
+          return true
+        }
+        if (!config.profileById(profileId)) {
+          write(`${c.red('档案不存在：' + profileId)}（/model 查看全部档案 id）\n`)
+          return true
+        }
         try {
-          sessions.setModel(sessionId, profileId ?? '', model ?? '')
+          sessions.setModel(sessionId, profileId, model)
           const view = currentView()
           write(`${c.green('本会话模型已绑定为')} ${view.model}\n`)
         } catch (err) {
@@ -365,15 +427,19 @@ async function handleCommand(line: string): Promise<boolean> {
       return true
     }
     case 'compact': {
-      if (isRunning()) {
-        write(`${c.yellow('任务运行中，请等结束后再压缩。')}\n`)
+      // 只看当前会话：别的会话在后台跑不该拦住这个会话的压缩
+      if (runningIds.has(sessionId)) {
+        write(`${c.yellow('当前会话的任务还在运行，请等结束后再压缩。')}\n`)
         return true
       }
-      write(c.dim('正在压缩上下文（总结当前分支）…\n'))
+      // 进度提示由 runner 的 notice 事件给出，这里不再重复打一行
+      compacting = true
       try {
         await runner.compact(sessionId)
       } catch (err) {
         write(`${c.red('压缩失败：' + (err as Error).message)}\n`)
+      } finally {
+        compacting = false
       }
       return true
     }
@@ -441,6 +507,10 @@ async function main(): Promise<void> {
   const list = sessions.list()
   const wanted = get('--session')
   const cfg = config.load()
+  // 指定了不存在的会话时要说出来：静默回落到"上次的会话"会让人以为参数没生效
+  if (wanted && !args.includes('--new') && !sessions.exists(wanted)) {
+    write(`${c.red('找不到会话：' + wanted)}${c.dim('（/sessions 可列出全部；本次忽略该参数）')}\n`)
+  }
   if (args.includes('--new')) {
     // --new：强制新会话（可选 --dir 指定目录）
     const dir = get('--dir') ? resolve(get('--dir')!) : ''
@@ -463,12 +533,18 @@ async function main(): Promise<void> {
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: c.cyan('› ') })
   rlRef = rl
+  bindAskBridge()
   rl.prompt()
 
   rl.on('line', (line) => {
     const text = line.trim()
     // 清掉已打印的提示符行，让输出从行首开始（管道输出时是 no-op）
     if (isTTY) write('\r\x1b[K')
+    // 先于空行判断：挂起的提问要把（哪怕是空的）输入当成答案，而不是再弹一个提示符
+    if (pendingAsk) {
+      answerPendingAsk(pendingAsk, text)
+      return
+    }
     if (!text) {
       rl.prompt()
       return
