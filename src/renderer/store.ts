@@ -490,6 +490,18 @@ class Store {
     }
   }
 
+  /** 重试上一步：主进程把 leaf 回退一格再重新生成，不新增 user 消息 */
+  async retryStep(): Promise<void> {
+    const id = this.currentId
+    if (!id) return
+    try {
+      const view = await window.pi.retryStep(id)
+      if (this.state.session?.id === id) this.set({ session: view })
+    } catch (err) {
+      this.notify('error', `重试失败：${cleanIpcError(err)}`)
+    }
+  }
+
   /* ---------------- 配置 ---------------- */
 
   async saveConfig(patch: ConfigPatch): Promise<boolean> {

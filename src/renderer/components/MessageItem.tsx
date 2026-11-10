@@ -17,6 +17,9 @@ interface Props {
   onFork: (id: string) => void
   onSwitch: (id: string, dir: -1 | 1) => void
   canFork: boolean
+  /** 失败的这条回复就是当前叶子时，才允许"重试这一步"（回退一格重新生成） */
+  canRetry?: boolean
+  onRetry?: () => void
 }
 
 export const MessageItem = memo(function MessageItem({
@@ -24,7 +27,9 @@ export const MessageItem = memo(function MessageItem({
   branch,
   onFork,
   onSwitch,
-  canFork
+  canFork,
+  canRetry,
+  onRetry
 }: Props): JSX.Element {
   if (message.role === 'user') {
     return (
@@ -94,6 +99,16 @@ export const MessageItem = memo(function MessageItem({
         <div className="msg-error">
           <span className="msg-error-title">请求失败</span>
           <pre>{message.error}</pre>
+          {canRetry && (
+            <button
+              className="retry-btn"
+              type="button"
+              onClick={onRetry}
+              title="用同一份上下文重新请求这一步，不新增消息；失败的那次会留成兄弟分支"
+            >
+              重试这一步
+            </button>
+          )}
         </div>
       )}
     </div>

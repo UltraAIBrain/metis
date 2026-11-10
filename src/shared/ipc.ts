@@ -25,6 +25,8 @@ export const IPC = {
   sessionCompact: 'session:compact',
   chatSend: 'chat:send',
   chatAbort: 'chat:abort',
+  /** 重试上一步（叶子是失败的 assistant 消息时回退一格重新生成） */
+  chatRetry: 'chat:retry',
   /** ask 工具：渲染层把用户的选择回填给等待中的提问 */
   askAnswer: 'ask:answer',
   attachmentStage: 'attachment:stage',

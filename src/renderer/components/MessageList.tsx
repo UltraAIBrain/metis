@@ -9,6 +9,8 @@ interface Props {
   running: boolean
   onFork: (id: string) => void
   onSwitch: (id: string, dir: -1 | 1) => void
+  /** 重试最后一步（仅当最后一条是失败的回复） */
+  onRetry: () => void
   /** 草稿会话：还没发过消息，也就还没落盘 */
   draft?: boolean
 }
@@ -78,7 +80,14 @@ function EmptyState({ draft }: { draft?: boolean }): JSX.Element {
   )
 }
 
-export const MessageList = memo(function MessageList({ session, running, onFork, onSwitch, draft }: Props): JSX.Element {
+export const MessageList = memo(function MessageList({
+  session,
+  running,
+  onFork,
+  onSwitch,
+  onRetry,
+  draft
+}: Props): JSX.Element {
   const live = useSlice((s) => (session ? s.live[session.id] : undefined))
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
@@ -105,6 +114,9 @@ export const MessageList = memo(function MessageList({ session, running, onFork,
     }
     return -1
   })()
+  // 只有"最后一条是失败回复"才给重试：它是最末叶子，回退一格不会丢任何东西
+  const tail = messages[messages.length - 1]
+  const retryableTail = !running && tail?.role === 'assistant' && tail.stopReason === 'error'
 
   return (
     <div className="messages" ref={ref}>
@@ -120,6 +132,8 @@ export const MessageList = memo(function MessageList({ session, running, onFork,
               onFork={onFork}
               onSwitch={onSwitch}
               canFork={!running && m.role === 'assistant' && i !== lastAssistantIndex}
+              canRetry={retryableTail && m.id === tail?.id}
+              onRetry={onRetry}
             />
           ))
         )}

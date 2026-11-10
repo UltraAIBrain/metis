@@ -1,4 +1,4 @@
-import { AgentFailure, classifyHttp } from '../errors'
+import { AgentFailure, classifyHttp, networkFailure, parseRetryAfterMs } from '../errors'
 
 /**
  * 空闲超时：连接没断但迟迟没有新数据时，不能无限等下去。
@@ -90,7 +90,7 @@ export async function* sseData(res: Response, opts: SseOptions = {}): AsyncGener
   }
 }
 
-/** 非 2xx 统一转成可分类错误。 */
+/** 非 2xx 统一转成可分类错误；限流/5xx 会把 Retry-After 带下去给重试策略。 */
 export async function ensureOk(res: Response): Promise<void> {
   if (res.ok) return
   let body = ''
@@ -99,11 +99,16 @@ export async function ensureOk(res: Response): Promise<void> {
   } catch {
     /* 忽略读取失败 */
   }
-  throw classifyHttp(res.status, body)
+  throw classifyHttp(res.status, body, parseRetryAfterMs(res.headers.get('retry-after')))
 }
 
-/** fetch 的网络层异常包装；响应头超时后中止连接，外部中断信号继续覆盖响应体。 */
+/**
+ * fetch 的网络层异常包装：响应头超时后中止连接，外部中断信号继续覆盖响应体。
+ * 失败时统一走 networkFailure()，把 cause 链摊平成一句可操作的话——
+ * 只报 "fetch failed" 等于没报（DNS / 端口 / 超时 / 证书 全一样）。
+ */
 export async function request(url: string, init: RequestInit, timeoutMs = HEADER_TIMEOUT_MS): Promise<Response> {
+  const started = Date.now()
   const controller = new AbortController()
   const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -111,15 +116,26 @@ export async function request(url: string, init: RequestInit, timeoutMs = HEADER
     return await fetch(url, { ...init, signal })
   } catch (err) {
     if (init.signal?.aborted) throw err
+    const elapsed = Date.now() - started
     if (controller.signal.aborted) {
-      throw new AgentFailure('network', `等待模型响应头超时（${Math.round(timeoutMs / 1000)} 秒）：${url}`, {
-        retryable: true
-      })
+      throw new AgentFailure(
+        'network',
+        `等待 ${hostOf(url)} 的响应头超时（${Math.round(timeoutMs / 1000)}s，已等 ${(elapsed / 1000).toFixed(1)}s）`,
+        { retryable: true, code: 'header_timeout' }
+      )
     }
     if ((err as Error).name === 'AbortError') throw err
-    throw new AgentFailure('network', `请求 ${url} 失败：${(err as Error).message}`, { retryable: true })
+    throw networkFailure(err, url, elapsed)
   } finally {
     clearTimeout(timer)
+  }
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url.slice(0, 60)
   }
 }
 

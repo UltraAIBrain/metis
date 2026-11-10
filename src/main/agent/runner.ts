@@ -17,7 +17,7 @@ import { lookupModel } from '../../shared/model-catalog'
 import { buildSystemPrompt } from './prompt'
 import { newId, type SessionStore } from './session'
 import { toolSpecs, executeTool, type ToolResult } from './tools'
-import { createProvider, streamWithRetry, type StreamResult } from './providers'
+import { createProvider, streamWithRetry, type RetryNotice, type StreamResult } from './providers'
 import { AgentFailure, describeFailure, failureHint } from './errors'
 import { sanitizeToolPairing } from './sanitize'
 import { isLocalHost } from '../../shared/providers'
@@ -198,7 +198,8 @@ export class AgentRunner {
           signal: lease.abort.signal,
           onTextDelta: () => {}
         },
-        (event, data) => this.log.info(event, data)
+        (event, data) => this.log.info(event, data),
+        { onRetry: (info) => this.emitRetry(sessionId, info) }
       )
       const text = result.blocks
         .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
@@ -257,8 +258,51 @@ export class AgentRunner {
     }
   }
 
+  /**
+   * 重试上一步：只在"当前叶子是一条失败的 assistant 消息"时可用。
+   *
+   * 做法是把 leaf 退回它的父节点再跑一次——**不新增 user 消息**，历史里那条 error
+   * 也留在原分支上（变成新回复的兄弟，用 ‹ › 还能切回去看）。所以重试不是"再问一遍"，
+   * 而是"用同一份上下文重新生成这一步"。
+   */
+  retry(sessionId: string): void {
+    if (!this.sessions.exists(sessionId)) throw new Error('会话不存在或已被删除')
+    if (this.active.has(sessionId)) throw new Error('任务运行中，请先停止再重试。')
+
+    const leafId = this.sessions.meta(sessionId).leafId
+    if (!leafId) throw new Error('这个会话还没有可以重试的步骤。')
+    const leaf = this.sessions.entries(sessionId).find((e) => e.id === leafId)
+    if (!leaf) throw new Error('找不到上一步，可能已被删除。')
+    const msg = leaf.message
+    if (msg.role !== 'assistant' || msg.stopReason !== 'error') {
+      throw new Error('最后一步不是失败状态，无需重试。')
+    }
+    if (!leaf.parentId) throw new Error('这一步没有可回退的上文，无法重试。')
+
+    this.sessions.setLeaf(sessionId, leaf.parentId)
+    const run: ActiveRun = { sessionId, abort: new AbortController(), queue: [], startedAt: Date.now() }
+    this.active.set(sessionId, run)
+    this.log.info('run.retry', { sessionId, droppedMessage: leafId })
+    void this.loop(run)
+  }
+
   abortAll(): void {
     for (const run of this.active.values()) run.abort.abort()
+  }
+
+  /**
+   * 把一次重试同步到界面。
+   * 静默重试是最糟的设计：连接卡住时用户只看到"运行中"不动，会以为死机然后强杀。
+   * 明确告诉他在等几秒、第几次，他才知道该不该按 Esc。
+   */
+  private emitRetry(sessionId: string, info: RetryNotice): void {
+    const why = info.kind === 'rate_limit' ? '触发限流' : info.kind === 'server' ? '服务端异常' : '连接失败'
+    this.emit({
+      type: 'notice',
+      sessionId,
+      level: 'warn',
+      text: `${why}，${(info.delayMs / 1000).toFixed(1)} 秒后重试（${info.failed}/${info.maxAttempts}）`
+    })
   }
 
   private async loop(run: ActiveRun): Promise<void> {
@@ -401,7 +445,8 @@ export class AgentRunner {
                 this.emit({ type: 'thinking_delta', sessionId, messageId, delta })
               }
             },
-            (event, data) => this.log.info(event, data)
+            (event, data) => this.log.info(event, data),
+            { onRetry: (info) => this.emitRetry(sessionId, info) }
           )
 
         try {
@@ -574,7 +619,8 @@ export class AgentRunner {
                     // 子过程不上屏：界面只看到 task 工具在执行，避免两个"正在生成"气泡
                     onTextDelta: () => {}
                   },
-                  (event, data) => this.log.info(event, data)
+                  (event, data) => this.log.info(event, data),
+                  { onRetry: (info) => this.emitRetry(sessionId, info) }
                 )
               } catch (err) {
                 const ae = describeFailure(err)

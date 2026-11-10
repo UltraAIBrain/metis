@@ -9,7 +9,7 @@ import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent, ToolMessage } from '../src/shared/types'
+import type { AgentEvent, AssistantMessage, ToolMessage } from '../src/shared/types'
 
 const home = mkdtempSync(join(tmpdir(), 'pidesktop-smoke-'))
 const workspace = join(home, 'workspace')
@@ -116,6 +116,8 @@ const CALLS: MockCall[] = [
 
 function startMockServer(): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
+    /** 网络抖动模拟：mock-flaky 的前两次连接直接掐断 */
+    let flakyHits = 0
     const server = createServer((req, res) => {
       // 模型列表接口：供 models 模块与"自动读取模型名"验证
       if (req.method === 'GET' && (req.url ?? '') === '/models') {
@@ -225,6 +227,14 @@ function startMockServer(): Promise<{ url: string; close: () => Promise<void> }>
           }
         } catch {
           /* ignore */
+        }
+
+        // 网络抖动模拟：mock-flaky 的前两次连接直接掐断（客户端会看到 ECONNRESET / 对端关闭），
+        // 第三次正常响应——用来验证"一次抖动不再打死整个回合"
+        if (model0.includes('flaky') && flakyHits < 2) {
+          flakyHits++
+          req.socket.destroy()
+          return
         }
 
         // 上下文压缩请求（system 是压缩提示词）：直接回一份结构化摘要
@@ -1130,6 +1140,192 @@ async function main(): Promise<void> {
   }
   check('响应头等待有完整超时', headerTimeout.includes('响应头超时') && Date.now() - headerStarted < 3000, headerTimeout)
   await new Promise<void>((resolve) => headerServer.close(() => resolve()))
+
+  console.log('\n[11b] 网络错误分类与退避重试')
+  const { streamWithRetry } = await import('../src/main/agent/providers')
+  const { networkFailure, parseRetryAfterMs, AgentFailure } = await import('../src/main/agent/errors')
+
+  // 1) "fetch failed" 必须被拆成能照做的一句话（host + 错误码 + 耗时）
+  const refused = networkFailure(
+    Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' })
+    }),
+    'https://api.z.ai/api/anthropic/v1/messages',
+    42
+  )
+  check(
+    '连接被拒绝：带出 host / 错误码 / 耗时',
+    refused.message.includes('api.z.ai') && refused.message.includes('ECONNREFUSED') && refused.message.includes('0.0s'),
+    refused.message
+  )
+  check('连接被拒绝归类为可重试', refused.retryable && refused.code === 'refused', `${refused.code} retryable=${refused.retryable}`)
+
+  // 2) Node 20+ 的 autoSelectFamily 会把多地址失败包成 AggregateError，也要能拆
+  const aggregated = networkFailure(
+    Object.assign(new TypeError('fetch failed'), {
+      cause: new AggregateError(
+        [Object.assign(new Error('connect ETIMEDOUT 1.2.3.4:443'), { code: 'ETIMEDOUT' })],
+        'connect ETIMEDOUT'
+      )
+    }),
+    'https://example.com/v1',
+    1200
+  )
+  check('多地址聚合错误识别为超时', aggregated.code === 'timeout' && aggregated.message.includes('ETIMEDOUT'), aggregated.message)
+
+  // 3) 证书错误重试只会在同一堵墙上撞 5 次，必须立刻放弃
+  const tls = networkFailure(
+    Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('self signed certificate'), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' })
+    }),
+    'https://proxy.corp/v1',
+    10
+  )
+  check('证书错误不重试', tls.code === 'tls' && tls.retryable === false, `${tls.code} retryable=${tls.retryable}`)
+
+  // 4) Retry-After 两种写法
+  check('Retry-After 秒数可解析', parseRetryAfterMs('3') === 3000, String(parseRetryAfterMs('3')))
+  check('Retry-After 非法值忽略', parseRetryAfterMs('soon') === undefined)
+  check('Retry-After 也认 HTTP 日期', typeof parseRetryAfterMs(new Date(Date.now() + 5000).toUTCString()) === 'number')
+
+  // 4b) HTTP 规范禁用的保留端口：请求根本没发出去，不该当网络抖动重试 5 次
+  const badPort = networkFailure(
+    Object.assign(new TypeError('fetch failed'), { cause: new Error('bad port') }),
+    'http://127.0.0.1:1/v1/chat/completions',
+    1
+  )
+  check('保留端口不重试且说明原因', badPort.code === 'bad_port' && badPort.retryable === false, badPort.message)
+
+  // 5) 端到端：前两次连接被掐断，第三次成功；用户侧必须看到每次重试
+  const flakySession = sessions.create(workspace, { profileId: 'deepseek', model: 'mock-flaky' })
+  const flakyEvents: AgentEvent[] = []
+  const flakyRunner = new AgentRunner(sessions, config, logger, (e) => flakyEvents.push(e))
+  await new Promise<void>((resolve) => {
+    const timer = setInterval(() => {
+      if (flakyEvents.some((e) => e.type === 'run_end')) {
+        clearInterval(timer)
+        resolve()
+      }
+    }, 20)
+    setTimeout(() => {
+      clearInterval(timer)
+      resolve()
+    }, 30_000)
+    flakyRunner.send(flakySession.id, '网络抖一下再回答')
+  })
+  const flakyEnd = flakyEvents.find((e): e is Extract<AgentEvent, { type: 'run_end' }> => e.type === 'run_end')
+  const retryNotices = flakyEvents.filter(
+    (e): e is Extract<AgentEvent, { type: 'notice' }> => e.type === 'notice' && e.text.includes('秒后重试')
+  )
+  check('连接被掐断后自动重试到成功', flakyEnd?.status === 'done', JSON.stringify(flakyEnd))
+  check(
+    '每次重试都提示用户（1/5、2/5）',
+    retryNotices.length === 2 && retryNotices[0].text.includes('1/5') && retryNotices[1].text.includes('2/5'),
+    JSON.stringify(retryNotices.map((n) => n.text))
+  )
+  const flakyAssistant = sessions
+    .view(flakySession.id)
+    .messages.filter((m): m is AssistantMessage => m.role === 'assistant')
+  check('重试后拿到正常回复（没有留下 error 消息）', flakyAssistant.length > 0 && !flakyAssistant.some((m) => m.error), JSON.stringify(flakyAssistant.map((m) => m.stopReason)))
+
+  // 6) 连不上时：报错可读，且重试用尽后及时返回（不会无限转圈）。
+  //    先绑再关拿一个"确定没人在听"的高位端口——1/9 这类保留端口会被 undici 在发请求前拒掉，
+  //    走不到 TCP 层，验证不到真实的 ECONNREFUSED 路径。
+  const probe = createServer(() => {})
+  await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r))
+  const probeAddr = probe.address()
+  const closedPort = typeof probeAddr === 'object' && probeAddr ? probeAddr.port : 0
+  await new Promise<void>((r) => probe.close(() => r()))
+  const refusedStarted = Date.now()
+  let refusedMsg = ''
+  try {
+    await streamWithRetry(
+      createProvider('openai', `http://127.0.0.1:${closedPort}`, 'smoke-key'),
+      {
+        system: 'x',
+        messages: [{ role: 'user', id: 'u9', ts: Date.now(), text: 'hi' }],
+        tools: [],
+        model: 'm',
+        temperature: 0,
+        thinking: 'low',
+        signal: new AbortController().signal,
+        onTextDelta: () => {}
+      },
+      () => {},
+      { maxAttempts: 2 }
+    )
+  } catch (err) {
+    refusedMsg = (err as Error).message
+    check('失败仍是 AgentFailure（可分类）', err instanceof AgentFailure)
+  }
+  check(
+    '连不上时给出可操作的报错',
+    refusedMsg.includes('127.0.0.1') && /拒绝|超时|ECONNREFUSED|EACCES/.test(refusedMsg),
+    refusedMsg
+  )
+  check('重试用尽后立即返回', Date.now() - refusedStarted < 8000, `${Date.now() - refusedStarted}ms`)
+
+  console.log('\n[11c] 重试上一步')
+  {
+    const retryDir = join(workspace, 'retry-proj')
+    mkdirSync(retryDir, { recursive: true })
+
+    // 1) 没有失败回复时拒绝：重试不是"再问一遍"，不该被当成普通发送
+    const healthy = sessions.create(retryDir, { profileId: 'deepseek', model: 'mock-small' }).id
+    sessions.append(healthy, { role: 'user', id: 'h1', ts: Date.now() - 1000, text: '正常的一步' })
+    sessions.append(healthy, {
+      role: 'assistant', id: 'h2', ts: Date.now(), model: 'mock-small', provider: 'openai',
+      stopReason: 'stop', blocks: [{ type: 'text', text: '正常回复' }]
+    })
+    const probeRunner = new AgentRunner(sessions, config, logger, () => {})
+    let refusedRetry = ''
+    try {
+      probeRunner.retry(healthy)
+    } catch (err) {
+      refusedRetry = (err as Error).message
+    }
+    check('最后一步没失败时拒绝重试', refusedRetry.includes('不是失败状态'), refusedRetry)
+
+    // 2) 失败回复 → 回退一格重新生成
+    const sid = sessions.create(retryDir, { profileId: 'deepseek', model: 'mock-small' }).id
+    const now = Date.now()
+    sessions.append(sid, { role: 'user', id: 'rt-u1', ts: now - 1000, text: 'RETRY-TEST 重试这一步' })
+    sessions.append(sid, {
+      role: 'assistant', id: 'rt-a1', ts: now, model: 'mock-small', provider: 'openai',
+      stopReason: 'error', error: '请求失败：fetch failed', blocks: []
+    })
+    const before = sessions.view(sid).messages
+    check('重试前叶子是失败回复', before.length === 2 && before[1].id === 'rt-a1', JSON.stringify(before.map((m) => m.id)))
+
+    const retryEvents: AgentEvent[] = []
+    const retryRunner = new AgentRunner(sessions, config, logger, (e) => retryEvents.push(e))
+    retryRunner.retry(sid)
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(() => {
+        if (retryEvents.some((e) => e.type === 'run_end')) {
+          clearInterval(timer)
+          resolve()
+        }
+      }, 20)
+      setTimeout(() => {
+        clearInterval(timer)
+        resolve()
+      }, 30_000)
+    })
+
+    const after = sessions.view(sid)
+    const tail = after.messages[after.messages.length - 1]
+    check('重试后叶子变成新的正常回复', tail?.role === 'assistant' && tail.stopReason !== 'error', JSON.stringify(tail))
+    check('没有新增 user 消息', after.messages.filter((m) => m.role === 'user').length === 1, `${after.messages.length} 条`)
+    check('失败的那次仍在会话树里（可切回）', sessions.entries(sid).some((e) => e.id === 'rt-a1'))
+    // 兄弟关系看树本身，不看分支路径：重试可能产生 tool 往返，末条不一定是直接兄弟
+    const siblingsOfFirst = sessions.entries(sid).filter((e) => e.parentId === 'rt-u1')
+    check(
+      '失败的那次与新回复成为兄弟',
+      siblingsOfFirst.length === 2 && siblingsOfFirst.some((e) => e.id === 'rt-a1'),
+      JSON.stringify(siblingsOfFirst.map((e) => `${e.id}:${e.message.role}`))
+    )
+  }
 
   console.log('\n[12] 思考强度')
   const baseReq = (model: string, thinking: 'low' | 'high' | 'max') => ({

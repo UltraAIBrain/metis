@@ -61,6 +61,8 @@ const api = {
   send: (id: string, text: string, attachments?: Attachment[]): Promise<SendResult> =>
     ipcRenderer.invoke(IPC.chatSend, id, text, attachments),
   abort: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.chatAbort, id),
+  /** 重试上一步：回退一格重新生成（不新增 user 消息） */
+  retryStep: (id: string): Promise<SessionView> => ipcRenderer.invoke(IPC.chatRetry, id),
   /** ask 工具：回填用户对结构化提问的选择（choice=-1 表示自行输入） */
   answerAsk: (callId: string, choice: number, text: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.askAnswer, callId, choice, text),

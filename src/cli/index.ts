@@ -178,6 +178,7 @@ const HELP = [
   '/model use <档案id> <模型名>  绑定本会话模型',
   '/thinking <low|high|max|reset>  设置思考强度',
   '/compact           压缩上下文：当前分支总结成摘要，切到摘要新分支（原分支保留）',
+  '/retry             重试上一步：仅当最后一步是失败回复时可用（不新增消息，失败的那次留成兄弟分支）',
   '/login [档案id]    OpenAI OAuth 登录（ChatGPT 订阅，默认 openai-codex）',
   '/logout [档案id]   清除 OAuth 登录',
   '/attach <文件>     给下一条消息带附件（图片 ≤10MB，文本 ≤256KB，一条消息最多 8 个）',
@@ -446,6 +447,19 @@ async function handleCommand(line: string): Promise<boolean> {
       }
       return true
     }
+    case 'retry': {
+      if (runningIds.has(sessionId)) {
+        write(`${c.yellow('当前会话的任务还在运行，请先停止再重试。')}\n`)
+        return true
+      }
+      try {
+        runner.retry(sessionId)
+        write(c.dim('正在重试上一步（回退一格重新生成，失败的那次留成兄弟分支）…\n'))
+      } catch (err) {
+        write(`${c.red('无法重试：' + (err as Error).message)}\n`)
+      }
+      return true
+    }
     case 'memory':
       write(`${c.dim('记忆文件：' + paths.memory())}\n${c.dim('内容由模型通过 memory 工具维护；图谱与全息元数据在同目录 JSON 里。')}\n`)
       return true
@@ -572,6 +586,8 @@ async function main(): Promise<void> {
   })
 
   rl.on('SIGINT', () => {
+    // /quit 之后、进程真正退出前（80ms 窗口）再按 Ctrl+C 不必再走一遍
+    if (quitting) return
     if (isRunning()) {
       // 第二次 Ctrl+C 强制退出：防止 provider 挂起（idle 看门狗）时永远退不出去
       if (sigintPending) {
@@ -591,6 +607,8 @@ async function main(): Promise<void> {
   })
 
   rl.on('close', () => {
+    // /quit 已经决定退出：管道输入关闭会紧跟着触发 close，别再打一遍"再见"
+    if (quitting) return
     if (isRunning()) {
       // Ctrl+D / 输入流关闭：任务还在跑，提示后等它自然结束（事件循环排空后进程自行退出）
       write(c.dim('\n（输入流已关闭；任务仍在运行，结束后自动退出）\n'))

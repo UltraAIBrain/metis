@@ -291,7 +291,34 @@ async function rendererRegressions(win) {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
   }
-  console.log('Renderer regressions passed · @ reference session switch + ask lifecycle + file request races + browser address commit')
+  // 失败的回复成为叶子时才给「重试这一步」；点击走 chat:retry（回退一格重新生成，不新增消息）
+  await selectSession('渲染自检会话')
+  const retryCalls = []
+  replace('chat:retry', (_event, id) => {
+    retryCalls.push(id)
+    return { id, title: '渲染自检会话', cwd: '', createdAt: 0, updatedAt: 0, leafId: null, messages: [], branch: {} }
+  })
+  emit({
+    type: 'assistant_end',
+    sessionId: 's_mdfixture',
+    message: {
+      role: 'assistant',
+      id: 'err-fixture',
+      ts: Date.now(),
+      blocks: [],
+      model: 'mock-model',
+      provider: 'openai',
+      stopReason: 'error',
+      error: '请求失败\n\n连接 127.0.0.1:59321 被拒绝（ECONNREFUSED，0.0s）'
+    }
+  })
+  await visible('.msg-error', 'ECONNREFUSED')
+  await visible('.retry-btn', '重试这一步')
+  await click('.retry-btn')
+  await waitFor(() => retryCalls.length === 1, 'retry requested')
+  check(retryCalls[0] === 's_mdfixture', 'retry dispatched to the active session')
+
+  console.log('Renderer regressions passed · @ reference session switch + ask lifecycle + file request races + browser address commit + retry step')
 }
 
 async function run() {

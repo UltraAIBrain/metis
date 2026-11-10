@@ -123,6 +123,7 @@ export function App(): JSX.Element {
   const onSwitch = useCallback((id: string, dir: -1 | 1) => void store.switchBranch(id, dir), [])
   const onSend = useCallback((sessionId: string, text: string, files: PickedFile[]) => store.send(sessionId, text, files), [])
   const onAbort = useCallback(() => void store.abort(), [])
+  const onRetry = useCallback(() => void store.retryStep(), [])
   const openSettings = useCallback(() => store.openSettings(), [])
   const closeSettings = useCallback(() => store.closeSettings(), [])
   const togglePanel = useCallback(() => store.togglePanel(), [])
@@ -190,7 +191,14 @@ export function App(): JSX.Element {
 
         {session ? (
           <>
-            <MessageList session={session} running={running} onFork={onFork} onSwitch={onSwitch} draft={draft} />
+            <MessageList
+              session={session}
+              running={running}
+              onFork={onFork}
+              onSwitch={onSwitch}
+              onRetry={onRetry}
+              draft={draft}
+            />
 
             <Composer
               sessionId={session.id}

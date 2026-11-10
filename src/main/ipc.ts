@@ -261,6 +261,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return true
   })
 
+  /** 重试上一步：回退一格重新生成，不新增 user 消息 */
+  ipcMain.handle(IPC.chatRetry, (_e, id: string): SessionView => {
+    ctx.runner.retry(id)
+    return ctx.sessions.view(id)
+  })
+
   // ask 工具：渲染层把用户选择回填给等待中的提问（未知的 callId 忽略）
   ipcMain.handle(IPC.askAnswer, (_e, callId: string, choice: number, text: string): boolean =>
     answerAsk(String(callId ?? ''), Number(choice ?? -1), String(text ?? ''))

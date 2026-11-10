@@ -432,6 +432,7 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 父进程的 PSModulePath 不会传入 shell（防模块解析错乱）），另有会话产物列表（write/edit 产出过的文件，点击用系统程序打开） |
 | 助手消息「分叉」 | 以该消息为父节点开新分支 |
 | 助手消息 `‹ 1/3 ›` | 在兄弟分支间切换 |
+| 失败回复「重试这一步」 | 仅当最后一条是失败回复时出现：把 leaf 回退一格重新请求**同一份上下文**，不新增 user 消息；失败的那次留成兄弟分支，可用 `‹ ›` 切回对照。终端版对应 `/retry` |
 
 ## 9. 稳定性设计
 
@@ -447,7 +448,15 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 - **提示注入边界**：AGENTS.md、全局记忆与插件说明注入 system prompt 时会声明它们是"本地数据"，
   与 `Rules` 冲突时以 `Rules` 为准。
 - **中断一致性**：任何中断都会为已发出的 `tool_use` 补一条 `tool_result`，避免会话结构损坏导致后续请求 400。
-- **重试策略**：仅对限流/网络/5xx 重试，最多 2 次指数退避；**已经推过 token 就不再重试**，否则会出现重复文本。
+- **重试策略**（对齐 Codex / Claude Code）：连接阶段失败退避 **0.5 / 1 / 2 / 4 / 8 秒**（±20% 抖动，
+  总预算 25s）；限流与 5xx 起步更缓并**尊重 `Retry-After`**（秒数与 HTTP 日期都认，封顶 60s，总预算 60s）；
+  **已经推过 token 就不再重试**（否则出现重复文本/重影思考），401/403/400 与 TLS 证书错误立刻失败。
+  每次重试都发一条「连接失败，1.0 秒后重试（1/5）」——静默重试和卡死在观感上没有区别。
+- **网络错误可诊断**：undici 只抛 `TypeError: fetch failed`，真正原因挂在 `cause` 上
+  （Node 20+ 的 autoSelectFamily 还会把多地址失败包成 `AggregateError.errors`）。这里把整条 cause 链摊平，
+  按 DNS / 端口拒绝 / 超时 / 连接重置 / 证书 / 保留端口分类，消息里带 host、系统错误码与耗时：
+  `连接 127.0.0.1:59321 被拒绝：base URL 端口不对，或本地代理 / 网关没在监听（ECONNREFUSED，0.0s）`。
+  注意 Node 的错误码是 `ETIMEDOUT`（E-TIME-DOUT），不含 `TIMEOUT` 子串，只写 `TIMEOUT` 会漏判。
 - **超时与清理**：bash 默认 120s 超时，超时/中断时在 Windows 上用 `taskkill /T /F` 杀进程树。
 - **输出限额**：命令输出 200KB、文件读取默认 2000 行（单次最大 5000 行）、diff 200 行，超出即截断并明确告知模型与用户；
   模型侧输出上限默认**自动跟随模型**：接口给了 `max_output_tokens` 就用它，没有查内置表，再没有兜底 16384。
@@ -474,7 +483,7 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
 - **终端版**（`npm run metis`；需先 `npm run build` 生成 `out/main/cli.js`）：纯 Node REPL，零 Electron 依赖，与桌面版共用
   runner / 会话 / 工具 / 插件 / 记忆 / 轨迹 / 子智能体全部核心。流式渲染（文本直写、
   工具行 `⏺ name 参数` → `✓ 结果 · 耗时`、用量行），运行中再输入会排队注入（steering），
-  Ctrl+C 只中止当前任务。  命令：`/help /new /sessions /switch /model /thinking /login /logout /compact /attach /export /memory /tools /quit`。
+  Ctrl+C 只中止当前任务。  命令：`/help /new /sessions /switch /model /thinking /login /logout /compact /retry /attach /export /memory /tools /quit`。
   启动参数：`--new`（强制新会话）、`--session <id>`、`--dir <目录>`、`--home <数据目录>`、`--help`。
   装成全局命令：`npm link` 后直接 `metis`（需 Node ≥ 20；`bin` 已声明，入口带 shebang，
   Windows 的 `.cmd` shim 与 macOS/Linux 的符号链接都能跑）。要免 Node 的单文件 exe 见 §6 的 `dist:cli`。
@@ -529,6 +538,11 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
     端到端预算（窗口设 1000、usage 递增，第 3/4/5 次各触发一档、用户侧三条 info、运行不中止）；
 34. ZCode 借鉴：插件 beforeTool 钩子（deny/modify/放行 + executeTool 全链路）、ask 桥（投递/回填/结果）、
     cron（解析/匹配/OR 语义/非法拒绝）、跨会话检索（命中与空查询）、chart（解析/拒绝坏数据/几何/折线 path）。
+35. 网络错误与退避重试：`fetch failed` 的 cause 链摊平（普通 cause / AggregateError 多地址 / 证书 / 保留端口）、
+    分类与可重试性判定、`Retry-After` 秒数与 HTTP 日期两种写法、假服务端前两次掐断连接后自动重试到成功
+    （用户侧收到 1/5、2/5 两次提示、不留下 error 消息）、重试用尽后立即返回而不是无限转圈。
+36. 重试上一步：最后一条不是失败回复时拒绝、失败回复回退一格重新生成、**不新增 user 消息**、
+    失败的那次仍在会话树里且与新回复成为兄弟（可切回）；渲染层回归覆盖按钮出现与 `chat:retry` 派发。
 
 另有 `npm run smoke:electron` 用真实 Electron 验证：窗口创建、渲染层沙箱配置、preload 桥接、
 基础 IPC（bootstrap / 建会话 / 列表），以及注入夹具会话后的 **UI 断言**——侧栏右键菜单
@@ -587,6 +601,10 @@ Windows 上优先探测 PowerShell 7（含 Microsoft Store 版，位于 WindowsA
   压缩是一次完整的模型往返，期间会话处于「运行中」：此时发的消息**排队**，压缩结束后按顺序交给一个正常
   回合处理（不会和摘要新根抢 leaf）；按 `Esc` 可中止压缩，原分支保持不变，排队消息照常落盘。
 - 只保留两个协议族，其他厂商通过 OpenAI 兼容网关接入。
+- **Node 的 fetch 不走系统代理**：桌面版与终端版都用内置 `fetch`（undici），它不读 `HTTPS_PROXY`
+  （Node 24 才有 `NODE_USE_ENV_PROXY`）。所以 Clash / v2ray 的「系统代理」模式对它无效——
+  要么开 **TUN / 增强模式**（网卡层接管），要么把 base URL 直接指向代理的端口。
+  报错里出现 `ENOTFOUND` / `ETIMEDOUT` 时先查这一条。
 - 模型列表依赖服务商提供 `GET /models`；部分网关禁用了该接口，此时只能手动输入模型名。
 - 一个提供商档案绑定一套 baseUrl + Key；同一厂商的多账号可各建一个自定义档案。
 - 未做代码高亮，diff 与代码块使用等宽字体呈现。
